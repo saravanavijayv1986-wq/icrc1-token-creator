@@ -1,0 +1,1 @@
+{"id": "icrc1-token-creator-8au2", "lang": "typescript"}
