@@ -219,7 +219,10 @@ import {
     getTokenInfo as api_icp_canister_getTokenInfo,
     performTokenOperation as api_icp_canister_performTokenOperation
 } from "~backend/icp/canister";
-import { ensureTreasuryWalletController as api_icp_setup_ensureTreasuryWalletController } from "~backend/icp/setup";
+import {
+    ensureTreasuryWalletController as api_icp_setup_ensureTreasuryWalletController,
+    generateTreasuryIdentity as api_icp_setup_generateTreasuryIdentity
+} from "~backend/icp/setup";
 
 export namespace icp {
 
@@ -230,6 +233,7 @@ export namespace icp {
             this.baseClient = baseClient
             this.deploy = this.deploy.bind(this)
             this.ensureTreasuryWalletController = this.ensureTreasuryWalletController.bind(this)
+            this.generateTreasuryIdentity = this.generateTreasuryIdentity.bind(this)
             this.getBalance = this.getBalance.bind(this)
             this.getStatus = this.getStatus.bind(this)
             this.getTokenInfo = this.getTokenInfo.bind(this)
@@ -252,6 +256,15 @@ export namespace icp {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/icp/setup/ensure-treasury-wallet-controller`, {method: "POST", body: JSON.stringify(params)})
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_setup_ensureTreasuryWalletController>
+        }
+
+        /**
+         * Generates a new identity for the treasury and provides instructions for setup.
+         */
+        public async generateTreasuryIdentity(): Promise<ResponseType<typeof api_icp_setup_generateTreasuryIdentity>> {
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/icp/setup/generate-treasury-identity`, {method: "POST", body: undefined})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_setup_generateTreasuryIdentity>
         }
 
         public async getBalance(params: RequestType<typeof api_icp_canister_getBalance>): Promise<ResponseType<typeof api_icp_canister_getBalance>> {

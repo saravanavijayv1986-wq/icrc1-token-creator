@@ -7,6 +7,7 @@ import { parseTreasuryDelegationIdentity, createAuthenticatedAgent, createQueryA
 import { monitor } from "../common/monitoring";
 import { AppError, ErrorCode, handleError } from "../common/errors";
 import log from "encore.dev/log";
+import { Ed25519KeyIdentity } from "@dfinity/identity";
 
 const treasuryCyclesWalletId = secret("TreasuryCyclesWallet");
 const treasuryDelegationIdentityJSON = secret("TreasuryDelegationIdentityJSON");
@@ -180,6 +181,52 @@ export const ensureTreasuryWalletController = api<
       }
     } catch (error) {
       return handleError(error as Error, "icp.ensureTreasuryWalletController");
+    }
+  })
+);
+
+export interface GenerateTreasuryIdentityResponse {
+  identityJSON: string;
+  principal: string;
+  instructions: string;
+}
+
+// Generates a new identity for the treasury and provides instructions for setup.
+export const generateTreasuryIdentity = api<void, GenerateTreasuryIdentityResponse>(
+  { expose: true, method: "POST", path: "/icp/setup/generate-treasury-identity" },
+  monitor("icp.generateTreasuryIdentity", async () => {
+    try {
+      const identity = Ed25519KeyIdentity.generate();
+      const identityJSON = JSON.stringify(identity.toJSON());
+      const principal = identity.getPrincipal().toText();
+      const walletId = treasuryCyclesWalletId() || "<your-cycles-wallet-id>";
+      const host = icpHost() || "https://ic0.app";
+      const network = host.includes("ic0.app") ? "ic" : "local";
+
+      const instructions = `
+Setup Instructions:
+1. Copy the 'identityJSON' value below and set it as the 'TreasuryDelegationIdentityJSON' secret in your Encore environment.
+   - Go to the Infrastructure tab in Encore.
+   - Find the 'TreasuryDelegationIdentityJSON' secret and click 'Edit'.
+   - Paste the copied JSON value and save.
+
+2. Add the new 'principal' as a controller to your cycles wallet.
+   - Open your terminal.
+   - Run the following command:
+     dfx canister --network ${network} update-settings ${walletId} --add-controller ${principal}
+
+3. Verify the controller was added.
+   - Run: dfx canister --network ${network} info ${walletId}
+   - Check that the new principal is listed under 'Controllers'.
+`;
+
+      return {
+        identityJSON,
+        principal,
+        instructions,
+      };
+    } catch (error) {
+      return handleError(error as Error, "icp.generateTreasuryIdentity");
     }
   })
 );

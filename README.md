@@ -38,7 +38,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
 ### Prerequisites
 - Node.js 18+
 - Encore CLI
-- Internet Computer development environment
+- Internet Computer development environment (`dfx`)
 
 ### Development Setup
 
@@ -49,25 +49,45 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
    npm install
    ```
 
-2. **Configure Secrets**
-   Set up the following secrets in the Encore dashboard:
+2. **Run Development Server**
+   ```bash
+   encore run
+   ```
+
+3. **Treasury Setup**
+   The application needs a dedicated identity to manage the cycles wallet for canister deployments. We provide an endpoint to simplify this process.
+   
+   a. **Generate Treasury Identity:**
+      Once the application is running, use a tool like `curl` or Postman to call the setup endpoint:
+      ```bash
+      curl -X POST http://localhost:4000/icp/setup/generate-treasury-identity
+      ```
+   
+   b. **Set the Secret:**
+      The command will return a JSON object containing `identityJSON`, `principal`, and `instructions`.
+      - Copy the value of `identityJSON`.
+      - In the Encore dashboard, go to the "Infrastructure" tab, find the `TreasuryDelegationIdentityJSON` secret, and paste the copied value.
+   
+   c. **Add Controller to Cycles Wallet:**
+      - Follow the `instructions` from the endpoint response to add the new `principal` as a controller to your cycles wallet. This typically involves running a `dfx` command like:
+      ```bash
+      dfx canister --network ic update-settings <your-cycles-wallet-id> --add-controller <the-new-principal>
+      ```
+
+4. **Configure Other Secrets**
+   Set up the remaining secrets in the Encore dashboard.
    ```
    ICPHost=https://ic0.app
    DeployCyclesAmount=3000000000000
    UserCreationFeeICP=1
    TreasuryICPWallet=<your-treasury-principal>
    TreasuryCyclesWallet=kwhhn-qqaaa-aaaaj-qns2q-cai
-   TreasuryDelegationIdentityJSON=<your-treasury-delegation-json>
+   # TreasuryDelegationIdentityJSON is set in the previous step
    ICPLedgerCanisterId=ryjl3-tyaaa-aaaaa-aaaba-cai
    ICRCWasmModuleUrl=https://github.com/dfinity/ICRC-1/releases/download/v0.1.0/icrc1_ledger.wasm
    ```
 
-3. **Run Development Server**
-   ```bash
-   encore run
-   ```
-
-4. **Access Application**
+5. **Access Application**
    - Backend API: http://localhost:4000
    - Frontend: http://localhost:5173
 
@@ -99,7 +119,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
 | `UserCreationFeeICP` | Fee in ICP for token creation | `1` |
 | `TreasuryICPWallet` | Treasury wallet principal for fee collection | `rrkah-...` |
 | `TreasuryCyclesWallet` | Cycles wallet canister ID | `kwhhn-qqaaa-aaaaj-qns2q-cai` |
-| `TreasuryDelegationIdentityJSON` | Treasury identity for cycles wallet operations | `{...}` |
+| `TreasuryDelegationIdentityJSON` | JSON for the treasury identity that controls the cycles wallet. | See "Treasury Setup" section. |
 
 ### Optional Configuration
 
