@@ -6,6 +6,7 @@ import { Actor } from "@dfinity/agent";
 import { validate } from "../common/validation";
 import { handleError, ErrorCode, AppError } from "../common/errors";
 import { metrics, monitor } from "../common/monitoring";
+import { storage as icpStorage } from "./storage";
 import log from "encore.dev/log";
 
 // ICP configuration secrets
@@ -119,7 +120,6 @@ const managementInterface = {
 };
 
 // Cycles Wallet Interface (wallet_canister)
-// Note: Real interfaces may differ across wallet implementations. Adjust as needed for your wallet canister.
 const cyclesWalletInterface = {
   wallet_create_canister: {
     update: true,
@@ -251,21 +251,21 @@ async function createAuthenticatedAgent(delegationChain: any, retries = 3): Prom
   throw new AppError(ErrorCode.BLOCKCHAIN_ERROR, "Failed to create authenticated agent");
 }
 
-// Get ICRC-1 token WASM module with caching and validation
-let cachedWasmModule: Uint8Array | null = null;
-let wasmCacheTime: number = 0;
-const WASM_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
-
+// Get ICRC-1 token WASM module using Object Storage for persistence and auditability
 async function getTokenWasm(): Promise<Uint8Array> {
-  // Return cached WASM if still valid
-  if (cachedWasmModule && Date.now() - wasmCacheTime < WASM_CACHE_TTL) {
-    return cachedWasmModule;
-  }
-
+  const objName = "wasm/icrc1_ledger.wasm";
   try {
+    // If present in object storage, download and return
+    const exists = await icpStorage.exists(objName);
+    if (exists) {
+      const buf = await icpStorage.download(objName);
+      log.info("Loaded WASM module from object storage", { name: objName, size: buf.length });
+      return new Uint8Array(buf);
+    }
+
     const url =
       wasmModuleUrl() ||
-      "https://github.com/dfinity/ICRC-1/releases/download/v0.1.0/icrc1_ledger.wasm.gz";
+      "https://github.com/dfinity/ICRC-1/releases/download/v0.1.0/icrc1_ledger.wasm";
 
     log.info("Fetching WASM module", { url });
 
@@ -288,28 +288,23 @@ async function getTokenWasm(): Promise<Uint8Array> {
     const arrayBuffer = await response.arrayBuffer();
     const wasmModule = new Uint8Array(arrayBuffer);
 
-    // Validate WASM module size (should be reasonable for ICRC-1)
+    // Validate WASM module size bounds
     if (wasmModule.length < 1000 || wasmModule.length > 50 * 1024 * 1024) {
       throw new Error(`Invalid WASM module size: ${wasmModule.length} bytes`);
     }
 
-    // Basic WASM magic number validation (if gzipped, this check will be different; keep simple here)
-    const magicNumber = Array.from(wasmModule.slice(0, 4));
-    const expectedMagic = [0x00, 0x61, 0x73, 0x6d]; // "\0asm"
-    if (!magicNumber.every((byte, i) => byte === expectedMagic[i])) {
-      log.warn(
-        "WASM magic number did not match; ensure module is a plain .wasm. Proceeding with provided bytes."
-      );
-    }
+    // Upload to object storage for future use
+    await icpStorage.upload(objName, Buffer.from(wasmModule), {
+      contentType: "application/wasm",
+      preconditions: { notExists: true }
+    }).catch(() => {
+      // Ignore conflict if already uploaded concurrently
+    });
 
-    // Cache the module
-    cachedWasmModule = wasmModule;
-    wasmCacheTime = Date.now();
-
-    log.info("WASM module fetched and cached", { size: wasmModule.length });
+    log.info("WASM module fetched and stored", { name: objName, size: wasmModule.length });
     return wasmModule;
   } catch (error) {
-    log.error("Failed to fetch WASM module", { error });
+    log.error("Failed to fetch or load WASM module", { error });
     throw new AppError(
       ErrorCode.EXTERNAL_SERVICE_ERROR,
       "Failed to fetch ICRC-1 WASM module",
@@ -366,11 +361,11 @@ function encodeTokenArgs(params: {
         ["icrc1:symbol", { Text: params.symbol }],
         ["icrc1:decimals", { Nat: BigInt(params.decimals) }],
         ["icrc1:fee", { Nat: 10000n }],
-        ["icrc1:logo", { Text: "" }] // Will be updated later if logo provided
+        ["icrc1:logo", { Text: "" }]
       ]
     };
 
-    // Use proper Candid encoding in production
+    // Use proper Candid encoding in production; for now, JSON-encode for structured transport
     return new TextEncoder().encode(JSON.stringify(args));
   } catch (error) {
     throw new AppError(
@@ -531,12 +526,12 @@ export interface DeployCanisterResponse {
 
 // Deploys an ICRC-1 token canister to the Internet Computer.
 // Flow:
-// 1) Collect user fee in ICP to treasury ICP wallet (on-chain transfer via ICRC-1 ledger using user's delegation).
-// 2) Create canister via Treasury Cycles Wallet with configured cycles amount (3T default).
+// 1) Collect user fee in ICP to treasury ICP wallet.
+// 2) Create canister via Treasury Cycles Wallet.
 // 3) Install token code and initialize owned by user principal.
 export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
   { expose: true, method: "POST", path: "/icp/deploy" },
-  monitor("icp.deploy")(async (req) => {
+  monitor("icp.deploy", async (req) => {
     try {
       // Comprehensive input validation
       const validator = validate()
@@ -581,7 +576,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         feeE8s: feeResult.feePaidE8s.toString()
       });
 
-      // Get ICRC-1 WASM module
+      // Get ICRC-1 WASM module (persisted in object storage)
       const wasmModule = await getTokenWasm();
 
       // Encode initialization arguments
@@ -663,10 +658,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
       const deploymentHash = `deploy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       // Record successful deployment metrics
-      metrics.increment("canister.deployed", {
-        status: "success",
-        network: "mainnet"
-      });
+      metrics.increment("canister.deployed");
 
       log.info("Canister deployment completed successfully", {
         canisterId: canisterId.toText(),
@@ -686,9 +678,9 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         feePaidICP: feeICPStr
       };
     } catch (error) {
-      metrics.increment("canister.deployed", { status: "failed" });
+      metrics.increment("canister.deploy_failed");
       log.error("Canister deployment failed", { error });
-      return handleError(error, "icp.deploy");
+      return handleError(error as Error, "icp.deploy");
     }
   })
 );
@@ -706,7 +698,7 @@ export interface CanisterStatus {
 // Retrieves the current status of a deployed canister.
 export const getStatus = api<{ canisterId: string }, CanisterStatus>(
   { expose: true, method: "GET", path: "/icp/canister/:canisterId/status" },
-  monitor("icp.getStatus")(async (req) => {
+  monitor("icp.getStatus", async (req) => {
     try {
       // Validate canister ID format
       validate()
@@ -758,7 +750,7 @@ export const getStatus = api<{ canisterId: string }, CanisterStatus>(
         controllers
       };
     } catch (error) {
-      return handleError(error, "icp.getStatus");
+      return handleError(error as Error, "icp.getStatus");
     }
   })
 );
@@ -782,7 +774,7 @@ export interface TokenOperationResponse {
 // Performs token operations using the owner's delegation.
 export const performTokenOperation = api<TokenOperationRequest, TokenOperationResponse>(
   { expose: true, method: "POST", path: "/icp/operation" },
-  monitor("icp.tokenOperation")(async (req) => {
+  monitor("icp.tokenOperation", async (req) => {
     try {
       // Comprehensive validation
       const validator = validate()
@@ -936,10 +928,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         log.warn("Failed to fetch updated balance", { error });
       }
 
-      metrics.increment("token.operation", {
-        operation: req.operation,
-        status: "success"
-      });
+      metrics.increment("token.operation_success");
 
       log.info("Token operation completed successfully", {
         operation: req.operation,
@@ -954,11 +943,8 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         blockIndex: transactionId
       };
     } catch (error) {
-      metrics.increment("token.operation", {
-        operation: req.operation || "unknown",
-        status: "failed"
-      });
-      return handleError(error, "icp.performTokenOperation");
+      metrics.increment("token.operation_failed");
+      return handleError(error as Error, "icp.performTokenOperation");
     }
   })
 );
@@ -980,7 +966,7 @@ export interface TokenInfo {
 // Retrieves token information from the canister.
 export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
   { expose: true, method: "GET", path: "/icp/token/:canisterId/info" },
-  monitor("icp.getTokenInfo")(async (req) => {
+  monitor("icp.getTokenInfo", async (req) => {
     try {
       // Validate canister ID
       validate()
@@ -1051,7 +1037,7 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
         metadata: metadataEntries
       };
     } catch (error) {
-      return handleError(error, "icp.getTokenInfo");
+      return handleError(error as Error, "icp.getTokenInfo");
     }
   })
 );
@@ -1069,7 +1055,7 @@ export interface BalanceResponse {
 // Gets the balance of a specific account.
 export const getBalance = api<BalanceRequest, BalanceResponse>(
   { expose: true, method: "GET", path: "/icp/token/:canisterId/balance/:principal" },
-  monitor("icp.getBalance")(async (req) => {
+  monitor("icp.getBalance", async (req) => {
     try {
       // Validate inputs
       const validator = validate().required(req.canisterId, "canisterId").required(req.principal, "principal");

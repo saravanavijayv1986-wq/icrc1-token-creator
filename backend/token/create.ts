@@ -1,4 +1,4 @@
-import { api, APIError } from "encore.dev/api";
+import { api } from "encore.dev/api";
 import { tokenDB } from "./db";
 import { storage } from "./storage";
 import { icp } from "~encore/clients";
@@ -32,9 +32,9 @@ export interface CreateTokenResponse {
 // Creates a new ICRC-1 token and deploys it to the IC.
 export const create = api<CreateTokenRequest, CreateTokenResponse>(
   { expose: true, method: "POST", path: "/tokens" },
-  monitor("token.create")(async (req) => {
+  monitor("token.create", async (req) => {
     try {
-      // Rate limiting
+      // Rate limiting (SQL-backed)
       await tokenCreationLimiter.checkLimit(req.creatorPrincipal);
 
       // Input validation
@@ -214,11 +214,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         `;
 
         // Record metrics
-        metrics.increment("token.created", { 
-          status: "success",
-          mintable: String(req.isMintable ?? false),
-          burnable: String(req.isBurnable ?? false)
-        });
+        metrics.increment("token.created");
 
         log.info("Token deployment successful", { 
           tokenId: tokenRow.id,
@@ -242,7 +238,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           WHERE id = ${tokenRow.id}
         `;
         
-        metrics.increment("token.created", { status: "failed" });
+        metrics.increment("token.create_failed");
         
         log.error("ICP deployment failed", { 
           tokenId: tokenRow.id, 
@@ -259,7 +255,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         );
       }
     } catch (error) {
-      return handleError(error, "token.create");
+      return handleError(error as Error, "token.create");
     }
   })
 );
@@ -276,7 +272,7 @@ export interface SyncTokenResponse {
 // Syncs token data with the deployed canister on ICP.
 export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
   { expose: true, method: "POST", path: "/tokens/:tokenId/sync" },
-  monitor("token.sync")(async (req) => {
+  monitor("token.sync", async (req) => {
     try {
       // Input validation
       validate()
@@ -331,7 +327,7 @@ export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
         WHERE id = ${req.tokenId}
       `;
 
-      metrics.increment("token.synced", { status: "success" });
+      metrics.increment("token.synced");
       
       log.info("Token synced with canister", { 
         tokenId: req.tokenId, 
@@ -344,8 +340,8 @@ export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
         updatedFields: ['name', 'symbol', 'decimals', 'totalSupply', 'metadata']
       };
     } catch (error) {
-      metrics.increment("token.synced", { status: "failed" });
-      return handleError(error, "token.syncWithCanister");
+      metrics.increment("token.sync_failed");
+      return handleError(error as Error, "token.syncWithCanister");
     }
   })
 );

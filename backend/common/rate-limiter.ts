@@ -1,70 +1,72 @@
 import { APIError } from "encore.dev/api";
+import { tokenDB } from "../token/db";
 
-interface RateLimitConfig {
+interface RateLimiterOptions {
+  name: string;
   windowMs: number;
   maxRequests: number;
-  keyGenerator?: (req: any) => string;
 }
 
-class RateLimiter {
-  private requests = new Map<string, { count: number; resetTime: number }>();
+class SQLRateLimiter {
+  private name: string;
+  private windowMs: number;
+  private maxRequests: number;
 
-  constructor(private config: RateLimitConfig) {}
+  constructor(opts: RateLimiterOptions) {
+    this.name = opts.name;
+    this.windowMs = opts.windowMs;
+    this.maxRequests = opts.maxRequests;
+  }
 
   async checkLimit(key: string): Promise<void> {
-    const now = Date.now();
-    const record = this.requests.get(key);
-
-    if (!record || now > record.resetTime) {
-      // New window or expired window
-      this.requests.set(key, {
-        count: 1,
-        resetTime: now + this.config.windowMs
-      });
-      return;
+    if (!key) {
+      // Fallback key to avoid accidental global bucket
+      key = "anonymous";
     }
 
-    if (record.count >= this.config.maxRequests) {
-      const resetInSeconds = Math.ceil((record.resetTime - now) / 1000);
+    const now = Date.now();
+    const windowStart = new Date(Math.floor(now / this.windowMs) * this.windowMs);
+    const windowEnd = new Date(windowStart.getTime() + this.windowMs);
+
+    // Upsert and increment the counter atomically
+    const row = await tokenDB.rawQueryRow<{ count: number }>(
+      `
+      INSERT INTO rate_limits (limiter_name, key, window_start, window_end, count)
+      VALUES ($1, $2, $3, $4, 1)
+      ON CONFLICT (limiter_name, key, window_start)
+      DO UPDATE SET count = rate_limits.count + 1
+      RETURNING count
+      `,
+      this.name, key, windowStart, windowEnd
+    );
+
+    const count = row?.count ?? 1;
+    if (count > this.maxRequests) {
+      const resetInMs = windowEnd.getTime() - now;
+      const resetInSeconds = Math.max(1, Math.ceil(resetInMs / 1000));
       throw APIError.resourceExhausted(
         "Rate limit exceeded",
-        { retryAfter: `${resetInSeconds}s` }
+        { retryAfter: `${resetInSeconds}s`, limiter: this.name }
       );
-    }
-
-    record.count++;
-  }
-
-  // Cleanup expired entries periodically
-  cleanup(): void {
-    const now = Date.now();
-    for (const [key, record] of this.requests.entries()) {
-      if (now > record.resetTime) {
-        this.requests.delete(key);
-      }
     }
   }
 }
 
-// Rate limiters for different operations
-export const tokenCreationLimiter = new RateLimiter({
+// Pre-configured limiters
+export const tokenCreationLimiter = new SQLRateLimiter({
+  name: "token_create",
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 5 // 5 tokens per minute per user
+  maxRequests: 5,
 });
 
-export const tokenOperationLimiter = new RateLimiter({
+export const tokenOperationLimiter = new SQLRateLimiter({
+  name: "token_operation",
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 30 // 30 operations per minute per user
+  maxRequests: 30,
 });
 
-export const searchLimiter = new RateLimiter({
+export const searchLimiter = new SQLRateLimiter({
+  name: "search",
   windowMs: 60 * 1000, // 1 minute
-  maxRequests: 100 // 100 searches per minute per IP
+  maxRequests: 100,
 });
-
-// Cleanup expired rate limit entries every 5 minutes
-setInterval(() => {
-  tokenCreationLimiter.cleanup();
-  tokenOperationLimiter.cleanup();
-  searchLimiter.cleanup();
-}, 5 * 60 * 1000);

@@ -8,8 +8,8 @@ CREATE TABLE token_metrics (
   mint_count INTEGER NOT NULL DEFAULT 0,
   burn_count INTEGER NOT NULL DEFAULT 0,
   volume_24h BIGINT NOT NULL DEFAULT 0,
-  price_usd DECIMAL(18,8),
-  market_cap_usd DECIMAL(18,2),
+  price_usd DOUBLE PRECISION,
+  market_cap_usd DOUBLE PRECISION,
   created_at TIMESTAMP NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
@@ -30,7 +30,7 @@ CREATE TABLE daily_stats (
 CREATE TABLE platform_metrics (
   id BIGSERIAL PRIMARY KEY,
   metric_name TEXT NOT NULL,
-  metric_value DECIMAL(18,8) NOT NULL,
+  metric_value DOUBLE PRECISION NOT NULL,
   metric_tags JSONB,
   recorded_at TIMESTAMP NOT NULL DEFAULT NOW()
 );

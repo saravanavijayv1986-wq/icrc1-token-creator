@@ -1,4 +1,5 @@
 import log from "encore.dev/log";
+import { analyticsDB } from "../analytics/db";
 
 export interface MetricData {
   name: string;
@@ -7,17 +8,7 @@ export interface MetricData {
   timestamp?: Date;
 }
 
-export class MetricsCollector {
-  private static instance: MetricsCollector;
-  private metrics: MetricData[] = [];
-
-  static getInstance(): MetricsCollector {
-    if (!MetricsCollector.instance) {
-      MetricsCollector.instance = new MetricsCollector();
-    }
-    return MetricsCollector.instance;
-  }
-
+class MetricsCollector {
   increment(name: string, tags?: Record<string, string>): void {
     this.record(name, 1, tags);
   }
@@ -35,61 +26,42 @@ export class MetricsCollector {
   }
 
   private record(name: string, value: number, tags?: Record<string, string>): void {
-    const metric: MetricData = {
-      name,
-      value,
-      tags,
-      timestamp: new Date()
-    };
+    const timestamp = new Date();
 
-    this.metrics.push(metric);
-    
-    // Log metric for external monitoring systems
-    log.info("Metric recorded", {
-      metric: name,
-      value,
-      tags
+    // Persist metric to analytics.platform_metrics for auditability
+    analyticsDB.exec`
+      INSERT INTO platform_metrics (metric_name, metric_value, metric_tags, recorded_at)
+      VALUES (${name}, ${value}, ${tags ? JSON.stringify(tags) : null}, ${timestamp})
+    `.catch((err) => {
+      log.error("Failed to persist metric", { name, value, tags, error: err instanceof Error ? err.message : String(err) });
     });
 
-    // Keep only last 1000 metrics in memory
-    if (this.metrics.length > 1000) {
-      this.metrics = this.metrics.slice(-1000);
-    }
-  }
-
-  getMetrics(): MetricData[] {
-    return [...this.metrics];
-  }
-
-  clearMetrics(): void {
-    this.metrics = [];
+    // Additionally log for external sinks
+    log.info("Metric recorded", { metric: name, value, tags, timestamp });
   }
 }
 
-export const metrics = MetricsCollector.getInstance();
+export const metrics = new MetricsCollector();
 
-// Performance monitoring decorator
-export function monitor(metricName: string) {
-  return function (target: any, propertyName: string, descriptor: PropertyDescriptor) {
-    const method = descriptor.value;
-    
-    descriptor.value = async function (...args: any[]) {
-      const startTime = Date.now();
-      const tags = { method: propertyName };
-      
-      try {
-        metrics.increment(`${metricName}.started`, tags);
-        const result = await method.apply(this, args);
-        metrics.increment(`${metricName}.success`, tags);
-        return result;
-      } catch (error) {
-        metrics.increment(`${metricName}.error`, tags);
-        throw error;
-      } finally {
-        const duration = Date.now() - startTime;
-        metrics.timing(metricName, duration, tags);
-      }
-    };
+// Higher-order function to monitor an API handler with timings and counters
+export function monitor<Params, Response>(
+  metricName: string,
+  fn: (params: Params) => Promise<Response>
+): (params: Params) => Promise<Response> {
+  return async (params: Params): Promise<Response> => {
+    const startTime = Date.now();
+    try {
+      metrics.increment(`${metricName}.started`);
+      const res = await fn(params);
+      metrics.increment(`${metricName}.success`);
+      return res;
+    } catch (err) {
+      metrics.increment(`${metricName}.error`);
+      throw err;
+    } finally {
+      const duration = Date.now() - startTime;
+      metrics.timing(metricName, duration);
+    }
   };
 }
 

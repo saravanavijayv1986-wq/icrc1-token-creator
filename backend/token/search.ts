@@ -1,6 +1,7 @@
 import { api } from "encore.dev/api";
-import { Query } from "encore.dev/api";
+import { Query, Header } from "encore.dev/api";
 import { tokenDB } from "./db";
+import { searchLimiter } from "../common/rate-limiter";
 
 export interface SearchTokensRequest {
   query?: Query<string>;
@@ -14,6 +15,8 @@ export interface SearchTokensRequest {
   sortOrder?: Query<string>;
   limit?: Query<number>;
   offset?: Query<number>;
+  // Captured from request headers for rate limiting purposes
+  forwardedFor?: Header<"X-Forwarded-For">;
 }
 
 export interface TokenSearchResult {
@@ -46,6 +49,10 @@ export interface SearchTokensResponse {
 export const search = api<SearchTokensRequest, SearchTokensResponse>(
   { expose: true, method: "GET", path: "/tokens/search" },
   async (req) => {
+    // Rate limit based on client IP (via X-Forwarded-For)
+    const ipRaw = req.forwardedFor?.split(",")[0]?.trim() || "unknown";
+    await searchLimiter.checkLimit(ipRaw);
+
     const limit = req.limit ?? 20;
     const offset = req.offset ?? 0;
     const sortBy = req.sortBy ?? "created_at";

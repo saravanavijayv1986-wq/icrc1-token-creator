@@ -37,7 +37,7 @@ export interface GetTokenMetricsResponse {
 // Retrieves analytics metrics for a specific token.
 export const getTokenMetrics = api<GetTokenMetricsRequest, GetTokenMetricsResponse>(
   { expose: true, method: "GET", path: "/analytics/tokens/:tokenId/metrics" },
-  monitor("analytics.getTokenMetrics")(async (req) => {
+  monitor("analytics.getTokenMetrics", async (req) => {
     try {
       // Input validation
       validate()
@@ -85,7 +85,7 @@ export const getTokenMetrics = api<GetTokenMetricsRequest, GetTokenMetricsRespon
         ORDER BY metric_date DESC
       `;
 
-      const metrics: TokenMetrics[] = metricsRows.map(row => ({
+      const metricsList: TokenMetrics[] = metricsRows.map(row => ({
         tokenId: row.token_id,
         metricDate: row.metric_date,
         totalSupply: row.total_supply,
@@ -117,20 +117,17 @@ export const getTokenMetrics = api<GetTokenMetricsRequest, GetTokenMetricsRespon
         avgDailyVolume,
       };
 
-      metrics.increment("analytics.token_metrics_retrieved", { 
-        tokenId: req.tokenId.toString(),
-        days: days.toString()
-      });
+      metrics.increment("analytics.token_metrics_retrieved");
 
       log.info("Token metrics retrieved", { 
         tokenId: req.tokenId, 
         days, 
-        metricsCount: metrics.length 
+        metricsCount: metricsList.length 
       });
 
-      return { metrics, summary };
+      return { metrics: metricsList, summary };
     } catch (error) {
-      return handleError(error, "analytics.getTokenMetrics");
+      return handleError(error as Error, "analytics.getTokenMetrics");
     }
   })
 );
@@ -151,7 +148,7 @@ export interface PlatformStats {
 // Retrieves platform-wide analytics and statistics.
 export const getPlatformStats = api<void, PlatformStats>(
   { expose: true, method: "GET", path: "/analytics/platform" },
-  monitor("analytics.getPlatformStats")(async () => {
+  monitor("analytics.getPlatformStats", async () => {
     try {
       // Get overall platform statistics from token database
       const platformRow = await tokenDB.queryRow<{
@@ -205,13 +202,13 @@ export const getPlatformStats = api<void, PlatformStats>(
         dailyStats,
       };
     } catch (error) {
-      return handleError(error, "analytics.getPlatformStats");
+      return handleError(error as Error, "analytics.getPlatformStats");
     }
   })
 );
 
 // Helper function to record token metrics (called by other services)
-export async function recordTokenMetrics(tokenId: number, metrics: Omit<TokenMetrics, 'tokenId' | 'metricDate'>): Promise<void> {
+export async function recordTokenMetrics(tokenId: number, metricsData: Omit<TokenMetrics, 'tokenId' | 'metricDate'>): Promise<void> {
   try {
     const today = new Date().toISOString().split('T')[0];
     
@@ -221,8 +218,8 @@ export async function recordTokenMetrics(tokenId: number, metrics: Omit<TokenMet
         transfer_count, mint_count, burn_count, volume_24h
       ) 
       VALUES (
-        ${tokenId}, ${today}, ${metrics.totalSupply}, ${metrics.holderCount},
-        ${metrics.transferCount}, ${metrics.mintCount}, ${metrics.burnCount}, ${metrics.volume24h}
+        ${tokenId}, ${today}, ${metricsData.totalSupply}, ${metricsData.holderCount},
+        ${metricsData.transferCount}, ${metricsData.mintCount}, ${metricsData.burnCount}, ${metricsData.volume24h}
       )
       ON CONFLICT (token_id, metric_date) 
       DO UPDATE SET

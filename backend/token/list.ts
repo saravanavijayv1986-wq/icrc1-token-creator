@@ -1,6 +1,5 @@
 import { api } from "encore.dev/api";
 import { Query } from "encore.dev/api";
-import { getAuthData } from "~encore/auth";
 import { tokenDB } from "./db";
 
 export interface Token {
@@ -23,7 +22,6 @@ export interface ListTokensRequest {
   offset?: Query<number>;
   creatorPrincipal?: Query<string>;
   status?: Query<string>;
-  myTokensOnly?: Query<boolean>;
 }
 
 export interface ListTokensResponse {
@@ -37,7 +35,6 @@ export const list = api<ListTokensRequest, ListTokensResponse>(
   async (req) => {
     const limit = req.limit ?? 50;
     const offset = req.offset ?? 0;
-    const auth = getAuthData();
 
     let whereClause = "1=1";
     const params: any[] = [];
@@ -46,12 +43,6 @@ export const list = api<ListTokensRequest, ListTokensResponse>(
     if (req.creatorPrincipal) {
       whereClause += " AND creator_principal = $" + (params.length + 1);
       params.push(req.creatorPrincipal);
-    }
-
-    // Filter to show only current user's tokens
-    if (req.myTokensOnly && auth) {
-      whereClause += " AND creator_principal = $" + (params.length + 1);
-      params.push(auth.principal);
     }
 
     // Filter by status

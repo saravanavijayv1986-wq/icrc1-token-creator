@@ -1,6 +1,8 @@
-import { api, APIError } from "encore.dev/api";
+import { api } from "encore.dev/api";
 import { tokenDB } from "./db";
 import { icp } from "~encore/clients";
+import { tokenOperationLimiter } from "../common/rate-limiter";
+import { handleError } from "../common/errors";
 
 export interface TransferTokenRequest {
   tokenId: number;
@@ -22,43 +24,46 @@ export interface TransferTokenResponse {
 export const transfer = api<TransferTokenRequest, TransferTokenResponse>(
   { expose: true, method: "POST", path: "/tokens/:tokenId/transfer" },
   async (req) => {
-    // Verify token exists and is deployed
-    const token = await tokenDB.queryRow<{
-      id: number;
-      canister_id: string;
-      status: string;
-      symbol: string;
-    }>`
-      SELECT id, canister_id, status, symbol
-      FROM tokens 
-      WHERE id = ${req.tokenId}
-    `;
-
-    if (!token) {
-      throw APIError.notFound("Token not found");
-    }
-
-    if (token.status !== 'deployed') {
-      throw APIError.failedPrecondition("Token is not deployed");
-    }
-
-    if (!token.canister_id) {
-      throw APIError.failedPrecondition("Token has no canister ID");
-    }
-
-    if (req.amount <= 0) {
-      throw APIError.invalidArgument("Transfer amount must be positive");
-    }
-
-    if (req.fromPrincipal === req.toPrincipal) {
-      throw APIError.invalidArgument("Cannot transfer to the same account");
-    }
-
-    if (!req.delegationIdentity) {
-      throw APIError.invalidArgument("Delegation identity is required");
-    }
-
     try {
+      // Rate limit transfer operations by sender
+      await tokenOperationLimiter.checkLimit(req.fromPrincipal);
+
+      // Verify token exists and is deployed
+      const token = await tokenDB.queryRow<{
+        id: number;
+        canister_id: string;
+        status: string;
+        symbol: string;
+      }>`
+        SELECT id, canister_id, status, symbol
+        FROM tokens 
+        WHERE id = ${req.tokenId}
+      `;
+
+      if (!token) {
+        throw new Error("Token not found");
+      }
+
+      if (token.status !== 'deployed') {
+        throw new Error("Token is not deployed");
+      }
+
+      if (!token.canister_id) {
+        throw new Error("Token has no canister ID");
+      }
+
+      if (req.amount <= 0) {
+        throw new Error("Transfer amount must be positive");
+      }
+
+      if (req.fromPrincipal === req.toPrincipal) {
+        throw new Error("Cannot transfer to the same account");
+      }
+
+      if (!req.delegationIdentity) {
+        throw new Error("Delegation identity is required");
+      }
+
       // Check balance before transfer
       const balanceResult = await icp.getBalance({
         canisterId: token.canister_id,
@@ -71,7 +76,7 @@ export const transfer = api<TransferTokenRequest, TransferTokenResponse>(
       const currentBalance = parseInt(balanceResult.balance);
       
       if (currentBalance < req.amount + transferFee) {
-        throw APIError.invalidArgument(
+        throw new Error(
           `Insufficient balance. Current: ${currentBalance}, Required: ${req.amount + transferFee} (including fee: ${transferFee})`
         );
       }
@@ -87,7 +92,7 @@ export const transfer = api<TransferTokenRequest, TransferTokenResponse>(
       });
 
       if (!result.success) {
-        throw APIError.internal("Transfer operation failed on canister");
+        throw new Error("Transfer operation failed on canister");
       }
 
       // Log transfer transaction
@@ -109,8 +114,7 @@ export const transfer = api<TransferTokenRequest, TransferTokenResponse>(
         newBalance: result.newBalance || "0",
       };
     } catch (error) {
-      console.error("ICP transfer operation failed:", error);
-      throw APIError.internal("Failed to transfer tokens on ICP", error);
+      return handleError(error as Error, "token.transfer");
     }
   }
 );
@@ -131,31 +135,31 @@ export interface GetBalanceResponse {
 export const getBalance = api<GetBalanceRequest, GetBalanceResponse>(
   { expose: true, method: "GET", path: "/tokens/:tokenId/balance/:principal" },
   async (req) => {
-    // Get token info
-    const token = await tokenDB.queryRow<{
-      canister_id: string;
-      status: string;
-      symbol: string;
-      decimals: number;
-    }>`
-      SELECT canister_id, status, symbol, decimals
-      FROM tokens 
-      WHERE id = ${req.tokenId}
-    `;
-
-    if (!token) {
-      throw APIError.notFound("Token not found");
-    }
-
-    if (token.status !== 'deployed') {
-      throw APIError.failedPrecondition("Token is not deployed");
-    }
-
-    if (!token.canister_id) {
-      throw APIError.failedPrecondition("Token has no canister ID");
-    }
-
     try {
+      // Get token info
+      const token = await tokenDB.queryRow<{
+        canister_id: string;
+        status: string;
+        symbol: string;
+        decimals: number;
+      }>`
+        SELECT canister_id, status, symbol, decimals
+        FROM tokens 
+        WHERE id = ${req.tokenId}
+      `;
+
+      if (!token) {
+        throw new Error("Token not found");
+      }
+
+      if (token.status !== 'deployed') {
+        throw new Error("Token is not deployed");
+      }
+
+      if (!token.canister_id) {
+        throw new Error("Token has no canister ID");
+      }
+
       // Get balance from canister
       const balanceResult = await icp.getBalance({
         canisterId: token.canister_id,
@@ -169,8 +173,7 @@ export const getBalance = api<GetBalanceRequest, GetBalanceResponse>(
         symbol: token.symbol,
       };
     } catch (error) {
-      console.error("Failed to get balance from ICP:", error);
-      throw APIError.internal("Failed to get balance from ICP", error);
+      return handleError(error as Error, "token.getBalance");
     }
   }
 );
