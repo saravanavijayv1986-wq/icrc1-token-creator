@@ -17,14 +17,16 @@ export const managementIdlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     module_hash: IDL.Opt(IDL.Vec(IDL.Nat8)),
   });
 
+  const CanisterSettings = IDL.Record({
+    controllers: IDL.Opt(IDL.Vec(IDL.Principal)),
+    compute_allocation: IDL.Opt(IDL.Nat),
+    memory_allocation: IDL.Opt(IDL.Nat),
+    freezing_threshold: IDL.Opt(IDL.Nat),
+  });
+
   return IDL.Service({
     create_canister: IDL.Func(
-      [IDL.Record({ settings: IDL.Opt(IDL.Record({
-        controllers: IDL.Opt(IDL.Vec(IDL.Principal)),
-        compute_allocation: IDL.Opt(IDL.Nat),
-        memory_allocation: IDL.Opt(IDL.Nat),
-        freezing_threshold: IDL.Opt(IDL.Nat),
-      })) })],
+      [IDL.Record({ settings: IDL.Opt(CanisterSettings) })],
       [IDL.Record({ canister_id: IDL.Principal })],
       []
     ),
@@ -41,6 +43,14 @@ export const managementIdlFactory: IDL.InterfaceFactory = ({ IDL }) => {
     canister_status: IDL.Func(
       [IDL.Record({ canister_id: CanisterId })],
       [canister_status],
+      []
+    ),
+    update_settings: IDL.Func(
+      [IDL.Record({
+        canister_id: CanisterId,
+        settings: CanisterSettings,
+      })],
+      [],
       []
     ),
     stop_canister: IDL.Func([IDL.Record({ canister_id: CanisterId })], [], []),

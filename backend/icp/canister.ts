@@ -87,7 +87,7 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
 // Try to reconstruct a SignIdentity from provided JSON.
 // Supports DelegationIdentity JSON (chain + inner key) and Ed25519KeyIdentity JSON.
 // Never logs sensitive data.
-function toSignIdentity(identityData: unknown): SignIdentity {
+export function toSignIdentity(identityData: unknown): SignIdentity {
   try {
     const data: any = typeof identityData === "string" ? JSON.parse(identityData) : identityData;
 
@@ -180,7 +180,7 @@ async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 5
 }
 
 // Create authenticated agent with proper error handling and retries
-async function createAuthenticatedAgent(identityInput: any, retries = 3): Promise<HttpAgent> {
+export async function createAuthenticatedAgent(identityInput: any, retries = 3): Promise<HttpAgent> {
   return await withBackoff(async () => {
     const identity = toSignIdentity(identityInput);
     const agent = new HttpAgent({
@@ -204,7 +204,7 @@ async function createAuthenticatedAgent(identityInput: any, retries = 3): Promis
 }
 
 // Helper to create a query agent with host fallback for robust production usage.
-async function createQueryAgentWithFallback(): Promise<HttpAgent> {
+export async function createQueryAgentWithFallback(): Promise<HttpAgent> {
   const hosts = [icpHost() || "https://ic0.app", "https://icp-api.io"];
   let lastErr: unknown = null;
   for (const host of hosts) {
@@ -317,7 +317,7 @@ function icpToE8s(amountStr: string): bigint {
   return BigInt(intPart) * 100000000n + BigInt(fracPadded);
 }
 
-function parseTreasuryDelegationIdentity(): SignIdentity {
+export function parseTreasuryDelegationIdentity(): SignIdentity {
   const json = treasuryDelegationIdentityJSON();
   if (!json) {
     throw new AppError(ErrorCode.UNAUTHORIZED_ACCESS, "Treasury delegation identity not configured");

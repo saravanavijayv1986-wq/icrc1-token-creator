@@ -7,6 +7,7 @@ import { HttpAgent, Actor } from "@dfinity/agent";
 import { managementIdlFactory } from "../icp/idl";
 import log from "encore.dev/log";
 import { secret } from "encore.dev/config";
+import { parseTreasuryDelegationIdentity, createAuthenticatedAgent } from "../icp/canister";
 
 // Health check endpoint
 export const getHealth = api<void, HealthStatus>(
@@ -93,4 +94,52 @@ healthChecker.addCheck('ic_ledger_connectivity', async () => {
     }
   }
   return { status: 'fail', message: "Unable to reach ICP public endpoints (ic0.app or icp-api.io)" };
+});
+
+// Ensures the treasury delegation principal is a controller of the cycles wallet canister (visibility-only).
+// This will report 'warn' if not configured, 'fail' if cannot verify (likely not a controller), and 'pass' if confirmed.
+const treasuryCyclesWalletId = secret("TreasuryCyclesWallet");
+const treasuryDelegationIdentityJSON = secret("TreasuryDelegationIdentityJSON");
+
+healthChecker.addCheck('treasury_wallet_controller', async () => {
+  const walletIdText = (treasuryCyclesWalletId() || "").trim();
+  const treasuryJson = treasuryDelegationIdentityJSON();
+
+  if (!walletIdText || !treasuryJson) {
+    return {
+      status: 'warn',
+      message: 'Treasury cycles wallet or delegation identity not configured; controller check skipped.',
+    };
+  }
+
+  try {
+    const walletId = Principal.fromText(walletIdText);
+    const treasuryIdentity = parseTreasuryDelegationIdentity();
+    const treasuryPrincipal = treasuryIdentity.getPrincipal().toText();
+
+    // Use treasury identity to attempt canister_status (requires controller permissions)
+    const agent = await createAuthenticatedAgent(treasuryIdentity);
+    const management = Actor.createActor(managementIdlFactory, {
+      agent,
+      canisterId: Principal.fromText("aaaaa-aa"),
+    }) as any;
+
+    const status = await management.canister_status({ canister_id: walletId });
+    const controllers: string[] = status.settings.controllers.map((p: any) => p.toText());
+    const isController = controllers.includes(treasuryPrincipal);
+
+    return isController
+      ? { status: 'pass', message: 'Treasury principal is a controller of the cycles wallet.' }
+      : {
+          status: 'fail',
+          message: 'Treasury principal is NOT a controller of the cycles wallet. Run the setup endpoint or the dfx update-settings command.',
+        };
+  } catch (err) {
+    // Likely unauthorized to query canister_status -> not a controller
+    return {
+      status: 'fail',
+      message:
+        'Unable to verify controllers (caller not authorized). Ensure the treasury principal has controller rights on the cycles wallet.',
+    };
+  }
 });
