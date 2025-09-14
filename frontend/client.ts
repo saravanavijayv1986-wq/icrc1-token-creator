@@ -37,6 +37,7 @@ export class Client {
     public readonly canister: canister.ServiceClient
     public readonly health: health.ServiceClient
     public readonly icp: icp.ServiceClient
+    public readonly monitoring: monitoring.ServiceClient
     public readonly token: token.ServiceClient
     private readonly options: ClientOptions
     private readonly target: string
@@ -56,6 +57,7 @@ export class Client {
         this.canister = new canister.ServiceClient(base)
         this.health = new health.ServiceClient(base)
         this.icp = new icp.ServiceClient(base)
+        this.monitoring = new monitoring.ServiceClient(base)
         this.token = new token.ServiceClient(base)
     }
 
@@ -298,6 +300,150 @@ export namespace icp {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/icp/operation`, {method: "POST", body: JSON.stringify(params)})
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_canister_performTokenOperation>
+        }
+    }
+}
+
+/**
+ * Import the endpoint handlers to derive the types for the client.
+ */
+import {
+    acknowledgeAlert as api_monitoring_monitoring_api_acknowledgeAlert,
+    getAlerts as api_monitoring_monitoring_api_getAlerts,
+    getCanisterHealth as api_monitoring_monitoring_api_getCanisterHealth,
+    getMonitoringConfig as api_monitoring_monitoring_api_getMonitoringConfig,
+    getPerformanceMetrics as api_monitoring_monitoring_api_getPerformanceMetrics,
+    getTransactionMetrics as api_monitoring_monitoring_api_getTransactionMetrics,
+    updateMonitoringConfig as api_monitoring_monitoring_api_updateMonitoringConfig
+} from "~backend/monitoring/monitoring_api";
+
+export namespace monitoring {
+
+    export class ServiceClient {
+        private baseClient: BaseClient
+
+        constructor(baseClient: BaseClient) {
+            this.baseClient = baseClient
+            this.acknowledgeAlert = this.acknowledgeAlert.bind(this)
+            this.getAlerts = this.getAlerts.bind(this)
+            this.getCanisterHealth = this.getCanisterHealth.bind(this)
+            this.getMonitoringConfig = this.getMonitoringConfig.bind(this)
+            this.getPerformanceMetrics = this.getPerformanceMetrics.bind(this)
+            this.getTransactionMetrics = this.getTransactionMetrics.bind(this)
+            this.updateMonitoringConfig = this.updateMonitoringConfig.bind(this)
+        }
+
+        /**
+         * Acknowledges a monitoring alert.
+         */
+        public async acknowledgeAlert(params: RequestType<typeof api_monitoring_monitoring_api_acknowledgeAlert>): Promise<ResponseType<typeof api_monitoring_monitoring_api_acknowledgeAlert>> {
+            // Construct the body with only the fields which we want encoded within the body (excluding query string or header fields)
+            const body: Record<string, any> = {
+                acknowledgedBy: params.acknowledgedBy,
+            }
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/alerts/${encodeURIComponent(params.alertId)}/acknowledge`, {method: "POST", body: JSON.stringify(body)})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_acknowledgeAlert>
+        }
+
+        /**
+         * Retrieves monitoring alerts with filtering options.
+         */
+        public async getAlerts(params: RequestType<typeof api_monitoring_monitoring_api_getAlerts>): Promise<ResponseType<typeof api_monitoring_monitoring_api_getAlerts>> {
+            // Convert our params into the objects we need for the request
+            const query = makeRecord<string, string | string[]>({
+                acknowledged: params.acknowledged === undefined ? undefined : String(params.acknowledged),
+                limit:        params.limit === undefined ? undefined : String(params.limit),
+                offset:       params.offset === undefined ? undefined : String(params.offset),
+                severity:     params.severity,
+            })
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/alerts`, {query, method: "GET", body: undefined})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_getAlerts>
+        }
+
+        /**
+         * Retrieves canister health metrics and status information.
+         */
+        public async getCanisterHealth(params: RequestType<typeof api_monitoring_monitoring_api_getCanisterHealth>): Promise<ResponseType<typeof api_monitoring_monitoring_api_getCanisterHealth>> {
+            // Convert our params into the objects we need for the request
+            const query = makeRecord<string, string | string[]>({
+                canisterId: params.canisterId,
+                limit:      params.limit === undefined ? undefined : String(params.limit),
+                offset:     params.offset === undefined ? undefined : String(params.offset),
+                tokenId:    params.tokenId === undefined ? undefined : String(params.tokenId),
+            })
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/health`, {query, method: "GET", body: undefined})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_getCanisterHealth>
+        }
+
+        /**
+         * Retrieves monitoring configuration for canisters.
+         */
+        public async getMonitoringConfig(params: RequestType<typeof api_monitoring_monitoring_api_getMonitoringConfig>): Promise<ResponseType<typeof api_monitoring_monitoring_api_getMonitoringConfig>> {
+            // Convert our params into the objects we need for the request
+            const query = makeRecord<string, string | string[]>({
+                canisterId: params.canisterId,
+                tokenId:    params.tokenId === undefined ? undefined : String(params.tokenId),
+            })
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/config`, {query, method: "GET", body: undefined})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_getMonitoringConfig>
+        }
+
+        /**
+         * Retrieves performance metrics for canisters.
+         */
+        public async getPerformanceMetrics(params: RequestType<typeof api_monitoring_monitoring_api_getPerformanceMetrics>): Promise<ResponseType<typeof api_monitoring_monitoring_api_getPerformanceMetrics>> {
+            // Convert our params into the objects we need for the request
+            const query = makeRecord<string, string | string[]>({
+                canisterId: params.canisterId,
+                hours:      params.hours === undefined ? undefined : String(params.hours),
+                metricType: params.metricType,
+                tokenId:    params.tokenId === undefined ? undefined : String(params.tokenId),
+            })
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/performance`, {query, method: "GET", body: undefined})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_getPerformanceMetrics>
+        }
+
+        /**
+         * Retrieves transaction success rates and performance metrics.
+         */
+        public async getTransactionMetrics(params: RequestType<typeof api_monitoring_monitoring_api_getTransactionMetrics>): Promise<ResponseType<typeof api_monitoring_monitoring_api_getTransactionMetrics>> {
+            // Convert our params into the objects we need for the request
+            const query = makeRecord<string, string | string[]>({
+                canisterId: params.canisterId,
+                days:       params.days === undefined ? undefined : String(params.days),
+                tokenId:    params.tokenId === undefined ? undefined : String(params.tokenId),
+            })
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/transactions`, {query, method: "GET", body: undefined})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_getTransactionMetrics>
+        }
+
+        /**
+         * Updates monitoring configuration for a canister.
+         */
+        public async updateMonitoringConfig(params: RequestType<typeof api_monitoring_monitoring_api_updateMonitoringConfig>): Promise<ResponseType<typeof api_monitoring_monitoring_api_updateMonitoringConfig>> {
+            // Construct the body with only the fields which we want encoded within the body (excluding query string or header fields)
+            const body: Record<string, any> = {
+                checkIntervalMinutes:   params.checkIntervalMinutes,
+                cycleCriticalThreshold: params.cycleCriticalThreshold,
+                cycleWarningThreshold:  params.cycleWarningThreshold,
+                enabled:                params.enabled,
+            }
+
+            // Now make the actual call to the API
+            const resp = await this.baseClient.callTypedAPI(`/monitoring/config/${encodeURIComponent(params.canisterId)}`, {method: "PUT", body: JSON.stringify(body)})
+            return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_monitoring_monitoring_api_updateMonitoringConfig>
         }
     }
 }

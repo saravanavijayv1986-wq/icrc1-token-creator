@@ -49,7 +49,7 @@ export const getCanisterHealth = api<GetCanisterHealthRequest, GetCanisterHealth
       const limit = req.limit ?? 50;
       const offset = req.offset ?? 0;
 
-      let whereConditions = ["1=1"];
+      const whereConditions: string[] = ["1=1"];
       const params: any[] = [];
 
       if (req.canisterId) {
@@ -64,16 +64,14 @@ export const getCanisterHealth = api<GetCanisterHealthRequest, GetCanisterHealth
 
       const whereClause = whereConditions.join(" AND ");
 
-      // Get latest health data for each canister
+      // Get latest health data for each canister (no cross-db joins)
       const healthQuery = `
         WITH latest_health AS (
           SELECT DISTINCT ON (ch.canister_id) 
             ch.canister_id, ch.token_id, ch.status, ch.cycle_balance,
             ch.memory_size, ch.uptime_percentage, ch.last_check,
-            ch.response_time_ms, ch.error_count,
-            t.token_name, t.symbol
+            ch.response_time_ms, ch.error_count
           FROM canister_health ch
-          JOIN tokens t ON ch.token_id = t.id
           WHERE ${whereClause}
           ORDER BY ch.canister_id, ch.last_check DESC
         ),
@@ -85,7 +83,15 @@ export const getCanisterHealth = api<GetCanisterHealthRequest, GetCanisterHealth
           GROUP BY canister_id
         )
         SELECT 
-          lh.*,
+          lh.canister_id,
+          lh.token_id,
+          lh.status,
+          lh.cycle_balance,
+          lh.memory_size,
+          lh.uptime_percentage,
+          lh.last_check,
+          lh.response_time_ms,
+          lh.error_count,
           COALESCE(ac.alert_count, 0) as alert_count
         FROM latest_health lh
         LEFT JOIN alert_counts ac ON lh.canister_id = ac.canister_id
@@ -96,8 +102,6 @@ export const getCanisterHealth = api<GetCanisterHealthRequest, GetCanisterHealth
       const healthRows = await monitoringDB.rawQueryAll<{
         canister_id: string;
         token_id: number;
-        token_name: string;
-        symbol: string;
         status: string;
         cycle_balance: string;
         memory_size: string;
@@ -108,34 +112,46 @@ export const getCanisterHealth = api<GetCanisterHealthRequest, GetCanisterHealth
         alert_count: number;
       }>(healthQuery, ...params, limit, offset);
 
-      // Get total count
+      // Get total distinct canisters
       const countQuery = `
         SELECT COUNT(DISTINCT ch.canister_id) as count
         FROM canister_health ch
-        JOIN tokens t ON ch.token_id = t.id
         WHERE ${whereClause}
       `;
       const totalRow = await monitoringDB.rawQueryRow<{ count: number }>(countQuery, ...params);
       const total = totalRow?.count ?? 0;
 
-      // Transform results
-      const canisters: CanisterHealthMetrics[] = healthRows.map(row => ({
-        canisterId: row.canister_id,
-        tokenId: row.token_id,
-        tokenName: row.token_name,
-        symbol: row.symbol,
-        status: row.status,
-        cycleBalance: row.cycle_balance,
-        memorySize: row.memory_size,
-        uptimePercentage: row.uptime_percentage,
-        lastCheck: row.last_check,
-        responseTimeMs: row.response_time_ms,
-        errorCount: row.error_count,
-        alertCount: row.alert_count,
-      }));
+      // Enrich with token info from token DB
+      const tokenIds = Array.from(new Set(healthRows.map(r => r.token_id)));
+      let tokenMap = new Map<number, { token_name: string; symbol: string }>();
+      if (tokenIds.length > 0) {
+        const tokenRows = await tokenDB.rawQueryAll<{ id: number; token_name: string; symbol: string }>(
+          "SELECT id, token_name, symbol FROM tokens WHERE id = ANY($1)",
+          tokenIds
+        );
+        tokenMap = new Map(tokenRows.map(tr => [tr.id, { token_name: tr.token_name, symbol: tr.symbol }]));
+      }
+
+      const canisters: CanisterHealthMetrics[] = healthRows.map(row => {
+        const t = tokenMap.get(row.token_id);
+        return {
+          canisterId: row.canister_id,
+          tokenId: row.token_id,
+          tokenName: t?.token_name ?? "Unknown",
+          symbol: t?.symbol ?? "",
+          status: row.status,
+          cycleBalance: String(row.cycle_balance),
+          memorySize: String(row.memory_size),
+          uptimePercentage: row.uptime_percentage,
+          lastCheck: row.last_check,
+          responseTimeMs: row.response_time_ms,
+          errorCount: row.error_count,
+          alertCount: row.alert_count,
+        };
+      });
 
       // Calculate summary
-      const healthyCanisters = canisters.filter(c => 
+      const healthyCanisters = canisters.filter(c =>
         c.status === 'running' && c.uptimePercentage >= 95 && c.alertCount === 0
       ).length;
       const unhealthyCanisters = canisters.length - healthyCanisters;
@@ -200,7 +216,7 @@ export const getTransactionMetrics = api<GetTransactionMetricsRequest, GetTransa
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
 
-      let whereConditions = [`tm.date_recorded >= '${startDate.toISOString().split('T')[0]}'`];
+      const whereConditions: string[] = [`tm.date_recorded >= '${startDate.toISOString().split('T')[0]}'`];
       const params: any[] = [];
 
       if (req.canisterId) {
@@ -220,14 +236,12 @@ export const getTransactionMetrics = api<GetTransactionMetricsRequest, GetTransa
           tm.canister_id, tm.token_id, tm.date_recorded,
           tm.total_transactions, tm.successful_transactions, tm.failed_transactions,
           tm.average_response_time_ms,
-          t.token_name, t.symbol,
           CASE 
             WHEN tm.total_transactions > 0 
             THEN (tm.successful_transactions::float / tm.total_transactions::float) * 100
             ELSE 0
           END as success_rate
         FROM transaction_metrics tm
-        JOIN tokens t ON tm.token_id = t.id
         WHERE ${whereClause}
         ORDER BY tm.date_recorded DESC, tm.canister_id
       `;
@@ -235,8 +249,6 @@ export const getTransactionMetrics = api<GetTransactionMetricsRequest, GetTransa
       const metricsRows = await monitoringDB.rawQueryAll<{
         canister_id: string;
         token_id: number;
-        token_name: string;
-        symbol: string;
         date_recorded: Date;
         total_transactions: number;
         successful_transactions: number;
@@ -245,26 +257,40 @@ export const getTransactionMetrics = api<GetTransactionMetricsRequest, GetTransa
         success_rate: number;
       }>(metricsQuery, ...params);
 
-      const metrics: TransactionSuccessMetrics[] = metricsRows.map(row => ({
-        canisterId: row.canister_id,
-        tokenId: row.token_id,
-        tokenName: row.token_name,
-        symbol: row.symbol,
-        date: row.date_recorded,
-        totalTransactions: row.total_transactions,
-        successfulTransactions: row.successful_transactions,
-        failedTransactions: row.failed_transactions,
-        successRate: row.success_rate,
-        averageResponseTime: row.average_response_time_ms,
-      }));
+      // Enrich with token info
+      const tokenIds = Array.from(new Set(metricsRows.map(r => r.token_id)));
+      let tokenMap = new Map<number, { token_name: string; symbol: string }>();
+      if (tokenIds.length > 0) {
+        const tokenRows = await tokenDB.rawQueryAll<{ id: number; token_name: string; symbol: string }>(
+          "SELECT id, token_name, symbol FROM tokens WHERE id = ANY($1)",
+          tokenIds
+        );
+        tokenMap = new Map(tokenRows.map(tr => [tr.id, { token_name: tr.token_name, symbol: tr.symbol }]));
+      }
+
+      const metricsData: TransactionSuccessMetrics[] = metricsRows.map(row => {
+        const t = tokenMap.get(row.token_id);
+        return {
+          canisterId: row.canister_id,
+          tokenId: row.token_id,
+          tokenName: t?.token_name ?? "Unknown",
+          symbol: t?.symbol ?? "",
+          date: row.date_recorded,
+          totalTransactions: row.total_transactions,
+          successfulTransactions: row.successful_transactions,
+          failedTransactions: row.failed_transactions,
+          successRate: row.success_rate,
+          averageResponseTime: row.average_response_time_ms,
+        };
+      });
 
       // Calculate summary
-      const totalTransactions = metrics.reduce((sum, m) => sum + m.totalTransactions, 0);
-      const totalSuccessful = metrics.reduce((sum, m) => sum + m.successfulTransactions, 0);
-      const totalFailed = metrics.reduce((sum, m) => sum + m.failedTransactions, 0);
+      const totalTransactions = metricsData.reduce((sum, m) => sum + m.totalTransactions, 0);
+      const totalSuccessful = metricsData.reduce((sum, m) => sum + m.successfulTransactions, 0);
+      const totalFailed = metricsData.reduce((sum, m) => sum + m.failedTransactions, 0);
       const overallSuccessRate = totalTransactions > 0 ? (totalSuccessful / totalTransactions) * 100 : 0;
-      const averageResponseTime = metrics.length > 0
-        ? metrics.reduce((sum, m) => sum + m.averageResponseTime, 0) / metrics.length
+      const averageResponseTime = metricsData.length > 0
+        ? metricsData.reduce((sum, m) => sum + m.averageResponseTime, 0) / metricsData.length
         : 0;
 
       const summary = {
@@ -275,7 +301,7 @@ export const getTransactionMetrics = api<GetTransactionMetricsRequest, GetTransa
         averageResponseTime,
       };
 
-      return { metrics, summary };
+      return { metrics: metricsData, summary };
     } catch (error) {
       return handleError(error as Error, "monitoring.getTransactionMetrics");
     }
@@ -325,7 +351,7 @@ export const getAlerts = api<GetAlertsRequest, GetAlertsResponse>(
       const limit = req.limit ?? 50;
       const offset = req.offset ?? 0;
 
-      let whereConditions = ["1=1"];
+      const whereConditions: string[] = ["1=1"];
       const params: any[] = [];
 
       if (req.severity) {
@@ -344,10 +370,8 @@ export const getAlerts = api<GetAlertsRequest, GetAlertsResponse>(
         SELECT 
           ma.id, ma.canister_id, ma.token_id, ma.alert_type, ma.severity,
           ma.title, ma.message, ma.metadata, ma.acknowledged,
-          ma.acknowledged_by, ma.acknowledged_at, ma.created_at,
-          t.token_name, t.symbol
+          ma.acknowledged_by, ma.acknowledged_at, ma.created_at
         FROM monitoring_alerts ma
-        JOIN tokens t ON ma.token_id = t.id
         WHERE ${whereClause}
         ORDER BY ma.created_at DESC
         LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -357,8 +381,6 @@ export const getAlerts = api<GetAlertsRequest, GetAlertsResponse>(
         id: number;
         canister_id: string;
         token_id: number;
-        token_name: string;
-        symbol: string;
         alert_type: string;
         severity: string;
         title: string;
@@ -370,34 +392,47 @@ export const getAlerts = api<GetAlertsRequest, GetAlertsResponse>(
         created_at: Date;
       }>(alertsQuery, ...params, limit, offset);
 
-      // Get total count
+      // Total count
       const countQuery = `
         SELECT COUNT(*) as count
         FROM monitoring_alerts ma
-        JOIN tokens t ON ma.token_id = t.id
         WHERE ${whereClause}
       `;
       const totalRow = await monitoringDB.rawQueryRow<{ count: number }>(countQuery, ...params);
       const total = totalRow?.count ?? 0;
 
-      const alerts: MonitoringAlert[] = alertRows.map(row => ({
-        id: row.id,
-        canisterId: row.canister_id,
-        tokenId: row.token_id,
-        tokenName: row.token_name,
-        symbol: row.symbol,
-        alertType: row.alert_type,
-        severity: row.severity,
-        title: row.title,
-        message: row.message,
-        metadata: row.metadata,
-        acknowledged: row.acknowledged,
-        acknowledgedBy: row.acknowledged_by,
-        acknowledgedAt: row.acknowledged_at,
-        createdAt: row.created_at,
-      }));
+      // Enrich with token info
+      const tokenIds = Array.from(new Set(alertRows.map(r => r.token_id)));
+      let tokenMap = new Map<number, { token_name: string; symbol: string }>();
+      if (tokenIds.length > 0) {
+        const tokenRows = await tokenDB.rawQueryAll<{ id: number; token_name: string; symbol: string }>(
+          "SELECT id, token_name, symbol FROM tokens WHERE id = ANY($1)",
+          tokenIds
+        );
+        tokenMap = new Map(tokenRows.map(tr => [tr.id, { token_name: tr.token_name, symbol: tr.symbol }]));
+      }
 
-      // Calculate summary
+      const alerts: MonitoringAlert[] = alertRows.map(row => {
+        const t = tokenMap.get(row.token_id);
+        return {
+          id: row.id,
+          canisterId: row.canister_id,
+          tokenId: row.token_id,
+          tokenName: t?.token_name ?? "Unknown",
+          symbol: t?.symbol ?? "",
+          alertType: row.alert_type,
+          severity: row.severity,
+          title: row.title,
+          message: row.message,
+          metadata: row.metadata,
+          acknowledged: row.acknowledged,
+          acknowledgedBy: row.acknowledged_by,
+          acknowledgedAt: row.acknowledged_at,
+          createdAt: row.created_at,
+        };
+      });
+
+      // Summary
       const criticalAlerts = alerts.filter(a => a.severity === 'critical').length;
       const warningAlerts = alerts.filter(a => a.severity === 'warning').length;
       const acknowledgedAlerts = alerts.filter(a => a.acknowledged).length;
@@ -438,7 +473,7 @@ export const acknowledgeAlert = api<AcknowledgeAlertRequest, AcknowledgeAlertRes
         .string(req.acknowledgedBy, "acknowledgedBy", { minLength: 1 })
         .throwIfInvalid();
 
-      const result = await monitoringDB.exec`
+      await monitoringDB.exec`
         UPDATE monitoring_alerts
         SET acknowledged = true, acknowledged_by = ${req.acknowledgedBy}, acknowledged_at = NOW()
         WHERE id = ${req.alertId} AND acknowledged = false
@@ -477,7 +512,7 @@ export const getMonitoringConfig = api<GetMonitoringConfigRequest, GetMonitoring
   { expose: true, method: "GET", path: "/monitoring/config" },
   monitor("monitoring.getMonitoringConfig", async (req) => {
     try {
-      let whereConditions = ["1=1"];
+      const whereConditions: string[] = ["1=1"];
       const params: any[] = [];
 
       if (req.canisterId) {
@@ -505,8 +540,8 @@ export const getMonitoringConfig = api<GetMonitoringConfigRequest, GetMonitoring
         canister_id: string;
         token_id: number;
         check_interval_minutes: number;
-        cycle_warning_threshold: string;
-        cycle_critical_threshold: string;
+        cycle_warning_threshold: number;
+        cycle_critical_threshold: number;
         enabled: boolean;
       }>(configQuery, ...params);
 
@@ -514,8 +549,8 @@ export const getMonitoringConfig = api<GetMonitoringConfigRequest, GetMonitoring
         canisterId: row.canister_id,
         tokenId: row.token_id,
         checkIntervalMinutes: row.check_interval_minutes,
-        cycleWarningThreshold: row.cycle_warning_threshold,
-        cycleCriticalThreshold: row.cycle_critical_threshold,
+        cycleWarningThreshold: String(row.cycle_warning_threshold),
+        cycleCriticalThreshold: String(row.cycle_critical_threshold),
         enabled: row.enabled,
       }));
 
@@ -549,7 +584,7 @@ export const updateMonitoringConfig = api<UpdateMonitoringConfigRequest, UpdateM
         .string(req.canisterId, "canisterId", { minLength: 1 })
         .throwIfInvalid();
 
-      // Verify canister exists
+      // Verify canister exists in token DB
       const token = await tokenDB.queryRow`
         SELECT id FROM tokens WHERE canister_id = ${req.canisterId}
       `;
@@ -558,8 +593,8 @@ export const updateMonitoringConfig = api<UpdateMonitoringConfigRequest, UpdateM
         throw new AppError(ErrorCode.RESOURCE_NOT_FOUND, "Canister not found");
       }
 
-      let updateFields = [];
-      let params = [];
+      const updateFields: string[] = [];
+      const params: any[] = [];
 
       if (req.checkIntervalMinutes !== undefined) {
         updateFields.push(`check_interval_minutes = $${params.length + 1}`);
@@ -586,7 +621,7 @@ export const updateMonitoringConfig = api<UpdateMonitoringConfigRequest, UpdateM
       }
 
       const updateQuery = `
-        INSERT INTO health_check_config (canister_id, token_id, ${updateFields.map((_, i) => updateFields[i].split(' = ')[0]).join(', ')})
+        INSERT INTO health_check_config (canister_id, token_id, ${updateFields.map(f => f.split(' = ')[0]).join(', ')})
         VALUES ($${params.length + 1}, $${params.length + 2}, ${params.map((_, i) => '$' + (i + 1)).join(', ')})
         ON CONFLICT (canister_id)
         DO UPDATE SET ${updateFields.join(', ')}
@@ -646,7 +681,7 @@ export const getPerformanceMetrics = api<GetPerformanceMetricsRequest, GetPerfor
       const startTime = new Date();
       startTime.setHours(startTime.getHours() - hours);
 
-      let whereConditions = [`pm.measurement_time >= '${startTime.toISOString()}'`];
+      const whereConditions: string[] = [`pm.measurement_time >= '${startTime.toISOString()}'`];
       const params: any[] = [];
 
       if (req.canisterId) {
@@ -669,10 +704,8 @@ export const getPerformanceMetrics = api<GetPerformanceMetricsRequest, GetPerfor
       const metricsQuery = `
         SELECT 
           pm.canister_id, pm.token_id, pm.metric_type, pm.metric_value,
-          pm.measurement_time, pm.metadata,
-          t.token_name, t.symbol
+          pm.measurement_time, pm.metadata
         FROM performance_metrics pm
-        JOIN tokens t ON pm.token_id = t.id
         WHERE ${whereClause}
         ORDER BY pm.measurement_time DESC
       `;
@@ -680,29 +713,41 @@ export const getPerformanceMetrics = api<GetPerformanceMetricsRequest, GetPerfor
       const metricsRows = await monitoringDB.rawQueryAll<{
         canister_id: string;
         token_id: number;
-        token_name: string;
-        symbol: string;
         metric_type: string;
         metric_value: number;
         measurement_time: Date;
         metadata: any;
       }>(metricsQuery, ...params);
 
-      const metrics: PerformanceMetrics[] = metricsRows.map(row => ({
-        canisterId: row.canister_id,
-        tokenId: row.token_id,
-        tokenName: row.token_name,
-        symbol: row.symbol,
-        metricType: row.metric_type,
-        metricValue: row.metric_value,
-        measurementTime: row.measurement_time,
-        metadata: row.metadata,
-      }));
+      // Enrich with token info
+      const tokenIds = Array.from(new Set(metricsRows.map(r => r.token_id)));
+      let tokenMap = new Map<number, { token_name: string; symbol: string }>();
+      if (tokenIds.length > 0) {
+        const tokenRows = await tokenDB.rawQueryAll<{ id: number; token_name: string; symbol: string }>(
+          "SELECT id, token_name, symbol FROM tokens WHERE id = ANY($1)",
+          tokenIds
+        );
+        tokenMap = new Map(tokenRows.map(tr => [tr.id, { token_name: tr.token_name, symbol: tr.symbol }]));
+      }
+
+      const metricsData: PerformanceMetrics[] = metricsRows.map(row => {
+        const t = tokenMap.get(row.token_id);
+        return {
+          canisterId: row.canister_id,
+          tokenId: row.token_id,
+          tokenName: t?.token_name ?? "Unknown",
+          symbol: t?.symbol ?? "",
+          metricType: row.metric_type,
+          metricValue: row.metric_value,
+          measurementTime: row.measurement_time,
+          metadata: row.metadata,
+        };
+      });
 
       // Calculate summary
-      const responseTimeMetrics = metrics.filter(m => m.metricType === 'response_time');
-      const errorRateMetrics = metrics.filter(m => m.metricType === 'error_rate');
-      const throughputMetrics = metrics.filter(m => m.metricType === 'throughput');
+      const responseTimeMetrics = metricsData.filter(m => m.metricType === 'response_time');
+      const errorRateMetrics = metricsData.filter(m => m.metricType === 'error_rate');
+      const throughputMetrics = metricsData.filter(m => m.metricType === 'throughput');
 
       const averageResponseTime = responseTimeMetrics.length > 0
         ? responseTimeMetrics.reduce((sum, m) => sum + m.metricValue, 0) / responseTimeMetrics.length
@@ -722,7 +767,7 @@ export const getPerformanceMetrics = api<GetPerformanceMetricsRequest, GetPerfor
         averageThroughput,
       };
 
-      return { metrics, summary };
+      return { metrics: metricsData, summary };
     } catch (error) {
       return handleError(error as Error, "monitoring.getPerformanceMetrics");
     }

@@ -2,7 +2,7 @@
 CREATE TABLE canister_health (
   id BIGSERIAL PRIMARY KEY,
   canister_id TEXT NOT NULL,
-  token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
+  token_id BIGINT NOT NULL,
   status TEXT NOT NULL,
   cycle_balance BIGINT NOT NULL,
   memory_size BIGINT NOT NULL,
@@ -19,7 +19,7 @@ CREATE TABLE canister_health (
 CREATE TABLE transaction_metrics (
   id BIGSERIAL PRIMARY KEY,
   canister_id TEXT NOT NULL,
-  token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
+  token_id BIGINT NOT NULL,
   date_recorded DATE NOT NULL DEFAULT CURRENT_DATE,
   total_transactions INTEGER NOT NULL DEFAULT 0,
   successful_transactions INTEGER NOT NULL DEFAULT 0,
@@ -33,7 +33,7 @@ CREATE TABLE transaction_metrics (
 CREATE TABLE cycle_alerts (
   id BIGSERIAL PRIMARY KEY,
   canister_id TEXT NOT NULL,
-  token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
+  token_id BIGINT NOT NULL,
   alert_type TEXT NOT NULL, -- 'low_cycles', 'critical_cycles', 'cycles_depleted'
   threshold_value BIGINT NOT NULL,
   current_value BIGINT NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE cycle_alerts (
 CREATE TABLE performance_metrics (
   id BIGSERIAL PRIMARY KEY,
   canister_id TEXT NOT NULL,
-  token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
+  token_id BIGINT NOT NULL,
   metric_type TEXT NOT NULL, -- 'response_time', 'throughput', 'error_rate'
   metric_value DOUBLE PRECISION NOT NULL,
   measurement_time TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -58,7 +58,7 @@ CREATE TABLE performance_metrics (
 CREATE TABLE health_check_config (
   id BIGSERIAL PRIMARY KEY,
   canister_id TEXT NOT NULL UNIQUE,
-  token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
+  token_id BIGINT NOT NULL,
   check_interval_minutes INTEGER NOT NULL DEFAULT 15,
   cycle_warning_threshold BIGINT NOT NULL DEFAULT 1000000000000, -- 1T cycles
   cycle_critical_threshold BIGINT NOT NULL DEFAULT 100000000000, -- 100B cycles
@@ -71,7 +71,7 @@ CREATE TABLE health_check_config (
 CREATE TABLE monitoring_alerts (
   id BIGSERIAL PRIMARY KEY,
   canister_id TEXT NOT NULL,
-  token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
+  token_id BIGINT NOT NULL,
   alert_type TEXT NOT NULL,
   severity TEXT NOT NULL, -- 'info', 'warning', 'critical'
   title TEXT NOT NULL,
