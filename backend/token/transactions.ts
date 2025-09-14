@@ -44,7 +44,7 @@ export const getTransactions = api<GetTransactionsRequest, GetTransactionsRespon
 
     const countQuery = `SELECT COUNT(*) as count FROM token_transactions WHERE ${whereClause}`;
     const totalRow = await tokenDB.rawQueryRow<{ count: number }>(countQuery, ...params);
-    const total = totalRow?.count ?? 0;
+    const total = Number(totalRow?.count ?? 0);
 
     const query = `
       SELECT 

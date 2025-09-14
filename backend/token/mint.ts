@@ -103,7 +103,7 @@ export const mint = api<MintTokenRequest, MintTokenResponse>(
           token_id, transaction_type, to_principal, amount, tx_hash, metadata
         ) VALUES (
           ${req.tokenId}, 'mint', ${req.toPrincipal}, ${req.amount}, ${result.transactionId},
-          ${JSON.stringify({ blockIndex: result.blockIndex, canisterOperation: true })}
+          ${{ blockIndex: result.blockIndex, canisterOperation: true }}
         )
       `;
 

@@ -113,7 +113,7 @@ export const burn = api<BurnTokenRequest, BurnTokenResponse>(
           token_id, transaction_type, from_principal, amount, tx_hash, metadata
         ) VALUES (
           ${req.tokenId}, 'burn', ${req.fromPrincipal}, ${req.amount}, ${result.transactionId},
-          ${JSON.stringify({ blockIndex: result.blockIndex, canisterOperation: true })}
+          ${{ blockIndex: result.blockIndex, canisterOperation: true }}
         )
       `;
 

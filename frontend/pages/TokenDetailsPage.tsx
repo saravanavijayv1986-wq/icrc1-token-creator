@@ -577,42 +577,46 @@ export default function TokenDetailsPage() {
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {transactions?.transactions.map((tx) => (
-                    <div
-                      key={tx.id}
-                      className="flex items-center justify-between p-4 border rounded-lg"
-                    >
-                      <div>
-                        <div className="font-medium capitalize">{tx.transactionType}</div>
-                        <div className="text-sm text-muted-foreground">
-                          {new Date(tx.createdAt).toLocaleString()}
+                  {transactions?.transactions.map((tx) => {
+                    const md = (typeof tx.metadata === "string" ? undefined : tx.metadata) as any | undefined;
+                    const blockIndex = md?.blockIndex;
+                    return (
+                      <div
+                        key={tx.id}
+                        className="flex items-center justify-between p-4 border rounded-lg"
+                      >
+                        <div>
+                          <div className="font-medium capitalize">{tx.transactionType}</div>
+                          <div className="text-sm text-muted-foreground">
+                            {new Date(tx.createdAt).toLocaleString()}
+                          </div>
+                          {tx.fromPrincipal && (
+                            <div className="text-xs text-muted-foreground">
+                              From: {tx.fromPrincipal.slice(0, 10)}...
+                            </div>
+                          )}
+                          {tx.toPrincipal && (
+                            <div className="text-xs text-muted-foreground">
+                              To: {tx.toPrincipal.slice(0, 10)}...
+                            </div>
+                          )}
                         </div>
-                        {tx.fromPrincipal && (
-                          <div className="text-xs text-muted-foreground">
-                            From: {tx.fromPrincipal.slice(0, 10)}...
-                          </div>
-                        )}
-                        {tx.toPrincipal && (
-                          <div className="text-xs text-muted-foreground">
-                            To: {tx.toPrincipal.slice(0, 10)}...
-                          </div>
-                        )}
+                        <div className="text-right">
+                          {tx.amount && (
+                            <div className="font-medium">{tx.amount.toLocaleString()} {token.symbol}</div>
+                          )}
+                          {tx.txHash && (
+                            <div className="text-sm text-muted-foreground">{tx.txHash}</div>
+                          )}
+                          {blockIndex && (
+                            <div className="text-xs text-green-600">
+                              Block: {blockIndex}
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-right">
-                        {tx.amount && (
-                          <div className="font-medium">{tx.amount.toLocaleString()} {token.symbol}</div>
-                        )}
-                        {tx.txHash && (
-                          <div className="text-sm text-muted-foreground">{tx.txHash}</div>
-                        )}
-                        {tx.metadata && JSON.parse(tx.metadata).blockIndex && (
-                          <div className="text-xs text-green-600">
-                            Block: {JSON.parse(tx.metadata).blockIndex}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>

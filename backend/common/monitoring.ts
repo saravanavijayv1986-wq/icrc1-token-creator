@@ -31,13 +31,13 @@ class MetricsCollector {
     // Persist metric to analytics.platform_metrics for auditability
     analyticsDB.exec`
       INSERT INTO platform_metrics (metric_name, metric_value, metric_tags, recorded_at)
-      VALUES (${name}, ${value}, ${tags ? JSON.stringify(tags) : null}, ${timestamp})
+      VALUES (${name}, ${value}, ${tags ?? null}, ${timestamp})
     `.catch((err) => {
-      log.error("Failed to persist metric", { name, value, tags, error: err instanceof Error ? err.message : String(err) });
+      log.error("Failed to persist metric", { name, value, error: err instanceof Error ? err.message : String(err) });
     });
 
     // Additionally log for external sinks
-    log.info("Metric recorded", { metric: name, value, tags, timestamp });
+    log.info("Metric recorded", { metric: name, value, timestamp });
   }
 }
 

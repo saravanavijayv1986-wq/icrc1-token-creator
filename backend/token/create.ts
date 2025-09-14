@@ -7,13 +7,15 @@ import { handleError, ErrorCode, AppError } from "../common/errors";
 import { tokenCreationLimiter } from "../common/rate-limiter";
 import { metrics, monitor } from "../common/monitoring";
 import log from "encore.dev/log";
+import crypto from "node:crypto";
+import { z } from "zod";
 
 export interface CreateTokenRequest {
   tokenName: string;
   symbol: string;
   totalSupply: number;
   decimals?: number;
-  logoFile?: string; // base64 encoded image
+  logoFile?: string; // base64 encoded image (data only, no prefix)
   isMintable?: boolean;
   isBurnable?: boolean;
   creatorPrincipal: string;
@@ -29,6 +31,26 @@ export interface CreateTokenResponse {
   cyclesUsed: string;
 }
 
+// Simple image type sniff: PNG/JPEG/WebP magic numbers
+function detectImageType(buf: Buffer): "image/png" | "image/jpeg" | "image/webp" | "unknown" {
+  if (buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.slice(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg";
+  if (buf.slice(0, 4).equals(Buffer.from([0x52, 0x49, 0x46, 0x46])) && buf.slice(8, 12).equals(Buffer.from([0x57, 0x45, 0x42, 0x50]))) return "image/webp";
+  return "unknown";
+}
+
+const createSchema = z.object({
+  tokenName: z.string().min(2).max(50),
+  symbol: z.string().regex(/^[A-Z0-9]+$/).min(2).max(10),
+  totalSupply: z.number().int().positive().max(1_000_000_000_000),
+  decimals: z.number().int().min(0).max(18).optional(),
+  logoFile: z.string().base64().optional(),
+  isMintable: z.boolean().optional(),
+  isBurnable: z.boolean().optional(),
+  creatorPrincipal: z.string().min(1),
+  delegationIdentity: z.any(),
+});
+
 // Creates a new ICRC-1 token and deploys it to the IC.
 export const create = api<CreateTokenRequest, CreateTokenResponse>(
   { expose: true, method: "POST", path: "/tokens" },
@@ -37,18 +59,17 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
       // Rate limiting (SQL-backed)
       await tokenCreationLimiter.checkLimit(req.creatorPrincipal);
 
-      // Input validation
+      // Input validation (zod + custom principal check)
+      const parsed = createSchema.safeParse(req);
+      if (!parsed.success) {
+        throw new AppError(
+          ErrorCode.VALIDATION_ERROR,
+          "Invalid input parameters",
+          { errors: parsed.error.errors.map(e => e.message) }
+        );
+      }
+
       const validator = validate()
-        .required(req.tokenName, "tokenName")
-        .string(req.tokenName, "tokenName", { minLength: 2, maxLength: 50 })
-        .required(req.symbol, "symbol")
-        .string(req.symbol, "symbol", { 
-          minLength: 2, 
-          maxLength: 10,
-          pattern: /^[A-Z0-9]+$/ 
-        })
-        .required(req.totalSupply, "totalSupply")
-        .number(req.totalSupply, "totalSupply", { min: 1, max: 1000000000000, integer: true })
         .required(req.creatorPrincipal, "creatorPrincipal")
         .principal(req.creatorPrincipal, "creatorPrincipal");
 
@@ -92,16 +113,9 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
       // Upload logo if provided
       if (req.logoFile) {
         try {
-          // Validate base64 image
-          if (!req.logoFile.match(/^[A-Za-z0-9+/]+=*$/)) {
-            throw new AppError(
-              ErrorCode.VALIDATION_ERROR,
-              "Invalid logo file format"
-            );
-          }
+          // strict base64 validation already in zod; decode
+          const buffer = Buffer.from(req.logoFile, "base64");
 
-          const buffer = Buffer.from(req.logoFile, 'base64');
-          
           // Validate file size (max 2MB)
           if (buffer.length > 2 * 1024 * 1024) {
             throw new AppError(
@@ -110,19 +124,31 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             );
           }
 
-          const fileName = `token-logos/${req.symbol.toLowerCase()}-${Date.now()}.png`;
+          // Sniff type and restrict
+          const contentType = detectImageType(buffer);
+          if (contentType === "unknown") {
+            throw new AppError(
+              ErrorCode.VALIDATION_ERROR,
+              "Unsupported image format. Allowed: PNG, JPEG, WebP"
+            );
+          }
+
+          // Basic checksum for caching validation
+          const sha256 = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
+
+          const fileName = `token-logos/${req.symbol.toLowerCase()}-${Date.now()}-${sha256}.png`;
           await storage.upload(fileName, buffer, {
-            contentType: 'image/png'
+            contentType
           });
           logoUrl = storage.publicUrl(fileName);
           
           log.info("Logo uploaded successfully", { fileName, size: buffer.length });
         } catch (error) {
-          log.error("Logo upload failed", { error });
+          log.error("Logo upload failed", { error: error instanceof Error ? error.message : "Unknown" });
           throw new AppError(
             ErrorCode.EXTERNAL_SERVICE_ERROR,
             "Failed to upload logo",
-            { originalError: error instanceof Error ? error.message : 'Unknown error' }
+            {}
           );
         }
       }
@@ -157,7 +183,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
       log.info("Token record created", { 
         tokenId: tokenRow.id, 
         symbol: req.symbol, 
-        creator: creatorPrincipal 
+        creator: "[REDACTED]" 
       });
 
       try {
@@ -184,7 +210,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           WHERE id = ${tokenRow.id}
         `;
 
-        // Log creation transaction with comprehensive metadata
+        // Log creation transaction with structured metadata
         const transactionId = deployResult.deploymentHash;
         const metadata = {
           cyclesUsed: deployResult.cyclesUsed,
@@ -208,7 +234,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             ${req.totalSupply}, 
             1.0, 
             ${transactionId},
-            ${JSON.stringify(metadata)},
+            ${metadata},
             NOW()
           )
         `;
@@ -248,10 +274,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         throw new AppError(
           ErrorCode.TOKEN_DEPLOYMENT_FAILED,
           "Failed to deploy canister to Internet Computer",
-          { 
-            tokenId: tokenRow.id,
-            originalError: error instanceof Error ? error.message : 'Unknown error'
-          }
+          { tokenId: tokenRow.id }
         );
       }
     } catch (error) {
@@ -318,11 +341,11 @@ export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
           symbol = ${tokenInfo.symbol},
           decimals = ${tokenInfo.decimals},
           total_supply = ${BigInt(tokenInfo.totalSupply)},
-          metadata = ${JSON.stringify({ 
+          metadata = ${{
             transferFee: tokenInfo.transferFee,
             metadata: tokenInfo.metadata,
             lastSync: new Date().toISOString()
-          })},
+          }},
           updated_at = NOW()
         WHERE id = ${req.tokenId}
       `;

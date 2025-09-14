@@ -1,5 +1,6 @@
 import { APIError } from "encore.dev/api";
 import log from "encore.dev/log";
+import { captureException } from "./sentry";
 
 export enum ErrorCode {
   VALIDATION_ERROR = "VALIDATION_ERROR",
@@ -27,33 +28,58 @@ export class AppError extends Error {
 }
 
 export function handleError(error: Error, context: string): never {
-  // Log the error with context
+  // Capture to Sentry first to preserve stack/context (avoids leaking sensitive values).
+  captureException(error, {
+    context,
+    ...(error instanceof AppError
+      ? { app_code: error.code, details: safeDetails(error.details) }
+      : {}),
+  });
+
+  // Log sanitized error (avoid logging raw request payloads or secrets in details).
   log.error(`Error in ${context}:`, {
     error: error.message,
     stack: error.stack,
-    ...(error instanceof AppError ? { code: error.code, details: error.details } : {})
+    ...(error instanceof AppError ? { code: error.code, details: safeDetails(error.details) } : {})
   });
 
   // Convert to appropriate API error
   if (error instanceof AppError) {
     switch (error.code) {
       case ErrorCode.VALIDATION_ERROR:
-        throw APIError.invalidArgument(error.message, error.details);
+        throw APIError.invalidArgument(error.message, safeDetails(error.details));
       case ErrorCode.RESOURCE_NOT_FOUND:
-        throw APIError.notFound(error.message, error.details);
+        throw APIError.notFound(error.message, safeDetails(error.details));
       case ErrorCode.UNAUTHORIZED_ACCESS:
-        throw APIError.permissionDenied(error.message, error.details);
+        throw APIError.permissionDenied(error.message, safeDetails(error.details));
       case ErrorCode.RATE_LIMIT_EXCEEDED:
-        throw APIError.resourceExhausted(error.message, error.details);
+        throw APIError.resourceExhausted(error.message, safeDetails(error.details));
       case ErrorCode.INSUFFICIENT_FUNDS:
-        throw APIError.failedPrecondition(error.message, error.details);
+        throw APIError.failedPrecondition(error.message, safeDetails(error.details));
       default:
-        throw APIError.internal(error.message, error.details);
+        throw APIError.internal(error.message, safeDetails(error.details));
     }
   }
 
   // Generic error handling
   throw APIError.internal("An unexpected error occurred", { originalError: error.message });
+}
+
+function safeDetails(details: unknown): unknown {
+  // Basic scrubbing: remove keys commonly containing sensitive content
+  if (!details || typeof details !== "object") return details;
+  const banned = ["authorization", "token", "password", "secret", "delegationIdentity", "wasm_module", "arg"];
+  const clone: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(details as Record<string, unknown>)) {
+    if (banned.includes(k)) {
+      clone[k] = "[REDACTED]";
+    } else if (v && typeof v === "object") {
+      clone[k] = "[object]";
+    } else {
+      clone[k] = v;
+    }
+  }
+  return clone;
 }
 
 export function validateInput<T>(data: any, schema: any): T {

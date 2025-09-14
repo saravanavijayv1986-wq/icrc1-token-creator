@@ -95,14 +95,18 @@ export const transfer = api<TransferTokenRequest, TransferTokenResponse>(
         throw new Error("Transfer operation failed on canister");
       }
 
-      // Log transfer transaction
+      // Log transfer transaction (structured metadata)
       await tokenDB.exec`
         INSERT INTO token_transactions (
           token_id, transaction_type, from_principal, to_principal, amount, fee_paid, tx_hash, metadata
         ) VALUES (
           ${req.tokenId}, 'transfer', ${req.fromPrincipal}, ${req.toPrincipal}, ${req.amount}, 
           ${transferFee}, ${result.transactionId},
-          ${JSON.stringify({ blockIndex: result.blockIndex, canisterOperation: true, fee: transferFee })}
+          ${{
+            blockIndex: result.blockIndex,
+            canisterOperation: true,
+            fee: transferFee
+          }}
         )
       `;
 
