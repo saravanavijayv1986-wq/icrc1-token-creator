@@ -2,6 +2,11 @@ import { api } from "encore.dev/api";
 import { healthChecker, HealthStatus } from "../common/monitoring";
 import { tokenDB } from "../token/db";
 import { analyticsDB } from "../analytics/db";
+import { Principal } from "@dfinity/principal";
+import { HttpAgent, Actor } from "@dfinity/agent";
+import { managementIdlFactory } from "../icp/idl";
+import log from "encore.dev/log";
+import { secret } from "encore.dev/config";
 
 // Health check endpoint
 export const getHealth = api<void, HealthStatus>(
@@ -59,4 +64,33 @@ healthChecker.addCheck('memory', async () => {
   }
   
   return { status: 'pass', message: `Memory usage: ${heapUsedMB.toFixed(2)}MB` };
+});
+
+// Basic ICP connectivity check against the public management canister.
+// Also verifies that we can reach the network endpoints used by ledger queries.
+const icpHost = secret("ICPHost");
+healthChecker.addCheck('ic_ledger_connectivity', async () => {
+  const hosts = [icpHost() || "https://ic0.app", "https://icp-api.io"];
+  for (const host of hosts) {
+    try {
+      const agent = new HttpAgent({ host });
+      if (host.includes("localhost") || host.includes("127.0.0.1")) {
+        await agent.fetchRootKey();
+      }
+      const management = Actor.createActor(managementIdlFactory, {
+        agent,
+        canisterId: Principal.fromText("aaaaa-aa"),
+      }) as any;
+      // A light-weight status call to verify connectivity. Use the management canister itself.
+      await management.canister_status({ canister_id: Principal.fromText("aaaaa-aa") });
+      return { status: 'pass', message: `ICP network reachable via ${host}` };
+    } catch (err) {
+      log.warn("ICP connectivity check failed for host", {
+        host,
+        error: err instanceof Error ? err.message : "Unknown",
+      });
+      // try next host
+    }
+  }
+  return { status: 'fail', message: "Unable to reach ICP public endpoints (ic0.app or icp-api.io)" };
 });

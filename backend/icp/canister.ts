@@ -203,6 +203,28 @@ async function createAuthenticatedAgent(identityInput: any, retries = 3): Promis
   }, retries, 500);
 }
 
+// Helper to create a query agent with host fallback for robust production usage.
+async function createQueryAgentWithFallback(): Promise<HttpAgent> {
+  const hosts = [icpHost() || "https://ic0.app", "https://icp-api.io"];
+  let lastErr: unknown = null;
+  for (const host of hosts) {
+    try {
+      const agent = new HttpAgent({ host });
+      if (host.includes("localhost") || host.includes("127.0.0.1")) {
+        await agent.fetchRootKey();
+      }
+      return agent;
+    } catch (e) {
+      lastErr = e;
+      log.warn("Failed creating query agent, trying next host", {
+        host,
+        error: e instanceof Error ? e.message : "Unknown",
+      });
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Failed to create query agent");
+}
+
 // Get ICRC-1 token WASM module using Object Storage for persistence and auditability
 async function getTokenWasm(): Promise<Uint8Array> {
   const objName = "wasm/icrc1_ledger.wasm";
@@ -513,11 +535,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
 
       // Verify canister is running
       try {
-        const agent = new HttpAgent({ host: icpHost() || "https://ic0.app" });
-        const host = icpHost() || "https://ic0.app";
-        if (host.includes("localhost") || host.includes("127.0.0.1")) {
-          await agent.fetchRootKey();
-        }
+        const agent = await createQueryAgentWithFallback();
         const management = Actor.createActor(managementIdlFactory, {
           agent,
           canisterId: Principal.fromText("aaaaa-aa"),
@@ -588,15 +606,8 @@ export const getStatus = api<{ canisterId: string }, CanisterStatus>(
         })
         .throwIfInvalid();
 
-      // Create agent (unauthenticated for status queries)
-      const agent = new HttpAgent({
-        host: icpHost() || "https://ic0.app",
-      });
-
-      const host = icpHost() || "https://ic0.app";
-      if (host.includes("localhost") || host.includes("127.0.0.1")) {
-        await agent.fetchRootKey();
-      }
+      // Create agent (unauthenticated for status queries) with host fallback
+      const agent = await createQueryAgentWithFallback();
 
       const management = Actor.createActor(managementIdlFactory, {
         agent,
@@ -846,15 +857,8 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
         })
         .throwIfInvalid();
 
-      // Create agent (unauthenticated for queries)
-      const agent = new HttpAgent({
-        host: icpHost() || "https://ic0.app",
-      });
-
-      const host = icpHost() || "https://ic0.app";
-      if (host.includes("localhost") || host.includes("127.0.0.1")) {
-        await agent.fetchRootKey();
-      }
+      // Create agent (unauthenticated for queries) with host fallback
+      const agent = await createQueryAgentWithFallback();
 
       const tokenActor = Actor.createActor(icrc1IdlFactory, {
         agent,
@@ -957,17 +961,11 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
 
       validator.throwIfInvalid();
 
-      const agent = new HttpAgent({
-        host: icpHost() || "https://ic0.app",
-      });
-
-      const host = icpHost() || "https://ic0.app";
-      if (host.includes("localhost") || host.includes("127.0.0.1")) {
-        await agent.fetchRootKey();
-      }
-
       // Resolve canister ID (supporting "dummy" for ICP ledger)
       const { principal: targetCanister } = resolveCanisterPrincipal(req.canisterId);
+
+      // Create agent with robust host fallback
+      const agent = await createQueryAgentWithFallback();
 
       const tokenActor = Actor.createActor(icrc1LedgerIdlFactory, {
         agent,
@@ -991,7 +989,7 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
         error: error instanceof Error ? error.message : "Unknown",
       });
 
-      // Return default balance instead of throwing
+      // Return default balance instead of throwing to avoid breaking the UI
       return {
         balance: "0",
       };
