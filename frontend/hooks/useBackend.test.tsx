@@ -146,7 +146,6 @@ describe("useBackend Hook", () => {
       success: true,
       transactionId: "mint-tx-123",
       blockIndex: "mint-block-456",
-      newTotalSupply: "1100000",
       newBalance: "100000",
     };
 
@@ -172,7 +171,6 @@ describe("useBackend Hook", () => {
       success: true,
       transactionId: "burn-tx-789",
       blockIndex: "burn-block-012",
-      newTotalSupply: "900000",
       newBalance: "50000",
     };
 
@@ -294,7 +292,7 @@ describe("useBackend Hook", () => {
 
     const balanceResult = await result.current.getICPBalance("test-principal");
 
-    expect(balanceResult).toEqual({ balance: "0" });
+    expect(balanceResult).toEqual({ balance: "0", error: "Network connection error" });
   });
 
   test("should sync token with canister", async () => {

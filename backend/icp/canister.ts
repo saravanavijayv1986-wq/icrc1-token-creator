@@ -929,6 +929,7 @@ export interface BalanceRequest {
 
 export interface BalanceResponse {
   balance: string;
+  error?: string;
 }
 
 // Gets the balance of a specific account.
@@ -989,9 +990,28 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
         error: error instanceof Error ? error.message : "Unknown",
       });
 
-      // Return default balance instead of throwing to avoid breaking the UI
+      // Return default balance and include a user-friendly error reason so the UI can display and retry.
+      let errorMessage = "Unknown error";
+      if (error instanceof Error) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes("network") || msg.includes("fetch")) {
+          errorMessage = "Network connection error";
+        } else if (msg.includes("timeout")) {
+          errorMessage = "Request timeout";
+        } else if (msg.includes("unauthorized") || msg.includes("unauthenticated")) {
+          errorMessage = "Authentication error";
+        } else if (msg.includes("canister") || msg.includes("replica")) {
+          errorMessage = "Blockchain network error";
+        } else if (msg.includes("principal") || msg.includes("invalid")) {
+          errorMessage = "Invalid wallet principal format";
+        } else {
+          errorMessage = error.message;
+        }
+      }
+
       return {
         balance: "0",
+        error: errorMessage,
       };
     }
   })

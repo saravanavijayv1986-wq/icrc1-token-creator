@@ -218,7 +218,7 @@ export function useBackend() {
       }, 2, 1000); // 2 retries with 1 second delay
       
       // Validate the response format
-      if (!result || typeof result.balance === 'undefined') {
+      if (!result || typeof (result as any).balance === 'undefined') {
         console.warn("Invalid ICP balance response format:", result);
         return {
           balance: "0",
@@ -226,9 +226,12 @@ export function useBackend() {
         };
       }
 
+      // Propagate backend-provided error if any
+      const backendError = (result as any).error as string | undefined;
+
       return {
-        balance: result.balance.toString(),
-        error: undefined
+        balance: (result as any).balance.toString(),
+        error: backendError
       };
     } catch (error) {
       console.error("Failed to fetch ICP balance:", {
