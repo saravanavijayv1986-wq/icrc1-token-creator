@@ -1,6 +1,8 @@
-// Environment-specific configuration
-const isProduction = process.env.NODE_ENV === 'production';
-const isDevelopment = process.env.NODE_ENV === 'development';
+// Environment-specific configuration (Vite)
+// Use import.meta.env.MODE for build-time mode detection.
+const mode = import.meta.env.MODE;
+const isProduction = mode === 'production';
+const isDevelopment = mode === 'development';
 
 // Configuration for wallet integration and Internet Identity
 export const walletConfig = {

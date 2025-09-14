@@ -9,7 +9,20 @@ import { storage as icpStorage } from "./storage";
 import log from "encore.dev/log";
 import crypto from "node:crypto";
 import { IDL } from "@dfinity/candid";
-import { icrc1IdlFactory, icrc1LedgerIdlFactory, cyclesWalletIdlFactory, managementIdlFactory, encodeIcrc1InitArgs } from "./idl";
+import {
+  icrc1IdlFactory,
+  icrc1LedgerIdlFactory,
+  cyclesWalletIdlFactory,
+  managementIdlFactory,
+  encodeIcrc1InitArgs,
+} from "./idl";
+import {
+  DelegationIdentity,
+  DelegationChain,
+  Ed25519KeyIdentity,
+  AnonymousIdentity,
+  type SignIdentity,
+} from "@dfinity/identity";
 
 // ICP configuration secrets
 const icpHost = secret("ICPHost");
@@ -71,6 +84,86 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
   }
 }
 
+// Try to reconstruct a SignIdentity from provided JSON.
+// Supports DelegationIdentity JSON (chain + inner key) and Ed25519KeyIdentity JSON.
+// Never logs sensitive data.
+function toSignIdentity(identityData: unknown): SignIdentity {
+  try {
+    const data: any = typeof identityData === "string" ? JSON.parse(identityData) : identityData;
+
+    // 1) DelegationIdentity-like JSON
+    if (data && (data.type === "DelegationIdentity" || data.delegation || data.delegations)) {
+      const chainJson = data.delegation ?? data.delegations;
+      const chain = DelegationChain.fromJSON(chainJson);
+
+      // Attempt to reconstruct inner identity from common fields
+      let inner: SignIdentity | null = null;
+
+      // a) Nested identity JSON (most robust)
+      if (data.identity) {
+        try {
+          inner = Ed25519KeyIdentity.fromJSON(data.identity);
+        } catch {
+          // fallthrough
+        }
+      }
+
+      // b) Ed25519KeyIdentity-style JSON on root
+      if (!inner) {
+        try {
+          inner = Ed25519KeyIdentity.fromJSON(data);
+        } catch {
+          // fallthrough
+        }
+      }
+
+      // c) Hex/base64 private key
+      if (!inner) {
+        const priv = data.privateKey ?? data.secretKey ?? data.sk ?? null;
+        if (typeof priv === "string") {
+          const isHex = /^[0-9a-fA-F]+$/.test(priv.replace(/^0x/, ""));
+          const buf = isHex ? Buffer.from(priv.replace(/^0x/, ""), "hex") : Buffer.from(priv, "base64");
+          inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+        }
+      }
+
+      if (!inner) {
+        throw new Error("Missing inner identity in delegation chain");
+      }
+
+      return DelegationIdentity.fromDelegation(inner, chain);
+    }
+
+    // 2) Plain Ed25519 identity JSON
+    try {
+      return Ed25519KeyIdentity.fromJSON(data);
+    } catch {
+      // fallthrough
+    }
+
+    // 3) Hex/base64 private key shortcut
+    if (data && typeof (data as any).secretKey === "string") {
+      const priv = (data as any).secretKey as string;
+      const isHex = /^[0-9a-fA-F]+$/.test(priv.replace(/^0x/, ""));
+      const buf = isHex ? Buffer.from(priv.replace(/^0x/, ""), "hex") : Buffer.from(priv, "base64");
+      return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+    }
+
+    // 4) Allow explicit anonymous identity for testing
+    if (data === "anonymous") {
+      return new AnonymousIdentity();
+    }
+
+    throw new Error("Unsupported identity JSON format");
+  } catch (e) {
+    throw new AppError(
+      ErrorCode.INVALID_DELEGATION,
+      "Invalid or unsupported delegation identity",
+      { reason: e instanceof Error ? e.message : String(e) }
+    );
+  }
+}
+
 // Retry helper with exponential backoff
 async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 500): Promise<T> {
   let error: any;
@@ -87,17 +180,18 @@ async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 5
 }
 
 // Create authenticated agent with proper error handling and retries
-async function createAuthenticatedAgent(delegationChain: any, retries = 3): Promise<HttpAgent> {
+async function createAuthenticatedAgent(identityInput: any, retries = 3): Promise<HttpAgent> {
   return await withBackoff(async () => {
+    const identity = toSignIdentity(identityInput);
     const agent = new HttpAgent({
       host: icpHost() || "https://ic0.app",
-      identity: delegationChain
+      identity,
     });
 
     // Configure agent with production settings
     agent.addTransform("update", ({ body }) => ({
       ...body,
-      ingress_expiry: BigInt(Date.now() + 5 * 60 * 1000) * BigInt(1_000_000) // 5 minutes
+      ingress_expiry: BigInt(Date.now() + 5 * 60 * 1000) * BigInt(1_000_000), // 5 minutes
     }));
 
     const host = icpHost() || "https://ic0.app";
@@ -141,9 +235,9 @@ async function getTokenWasm(): Promise<Uint8Array> {
         const response = await fetch(url, {
           headers: {
             "User-Agent": "TokenForge/1.0",
-            Accept: "application/wasm"
+            Accept: "application/wasm",
           },
-          signal: controller.signal
+          signal: controller.signal,
         });
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -167,22 +261,20 @@ async function getTokenWasm(): Promise<Uint8Array> {
     }
 
     // Upload to object storage for future use
-    await icpStorage.upload(objName, Buffer.from(wasmModule), {
-      contentType: "application/wasm",
-      preconditions: { notExists: true }
-    }).catch(() => {
-      // Ignore conflict if already uploaded concurrently
-    });
+    await icpStorage
+      .upload(objName, Buffer.from(wasmModule), {
+        contentType: "application/wasm",
+        preconditions: { notExists: true },
+      })
+      .catch(() => {
+        // Ignore conflict if already uploaded concurrently
+      });
 
     log.info("WASM module fetched and stored", { name: objName, size: wasmModule.length });
     return wasmModule;
   } catch (error) {
     log.error("Failed to fetch or load WASM module", { error: error instanceof Error ? error.message : "Unknown error" });
-    throw new AppError(
-      ErrorCode.EXTERNAL_SERVICE_ERROR,
-      "Failed to fetch ICRC-1 WASM module",
-      {}
-    );
+    throw new AppError(ErrorCode.EXTERNAL_SERVICE_ERROR, "Failed to fetch ICRC-1 WASM module", {});
   }
 }
 
@@ -203,21 +295,18 @@ function icpToE8s(amountStr: string): bigint {
   return BigInt(intPart) * 100000000n + BigInt(fracPadded);
 }
 
-function parseTreasuryDelegationIdentity(): any {
+function parseTreasuryDelegationIdentity(): SignIdentity {
   const json = treasuryDelegationIdentityJSON();
   if (!json) {
-    throw new AppError(
-      ErrorCode.UNAUTHORIZED_ACCESS,
-      "Treasury delegation identity not configured"
-    );
+    throw new AppError(ErrorCode.UNAUTHORIZED_ACCESS, "Treasury delegation identity not configured");
   }
   try {
-    return JSON.parse(json);
+    return toSignIdentity(JSON.parse(json));
   } catch (e) {
     throw new AppError(
       ErrorCode.INVALID_DELEGATION,
       "Invalid Treasury delegation identity JSON",
-      {}
+      { reason: e instanceof Error ? e.message : String(e) }
     );
   }
 }
@@ -236,7 +325,7 @@ async function collectCreationFeeWithUserIdentity(userAgent: HttpAgent): Promise
 
   const ledger = Actor.createActor(icrc1LedgerIdlFactory, {
     agent: userAgent,
-    canisterId: Principal.fromText(ledgerCanisterId)
+    canisterId: Principal.fromText(ledgerCanisterId),
   }) as ActorSubclass<any>;
 
   log.info("Collecting user creation fee", {
@@ -250,16 +339,12 @@ async function collectCreationFeeWithUserIdentity(userAgent: HttpAgent): Promise
     fee: [],
     memo: [],
     from_subaccount: [],
-    created_at_time: []
+    created_at_time: [],
   });
 
   if (res && res.Err) {
     const errDetails = JSON.stringify(res.Err);
-    throw new AppError(
-      ErrorCode.EXTERNAL_SERVICE_ERROR,
-      `ICP fee transfer failed: ${errDetails}`,
-      {}
-    );
+    throw new AppError(ErrorCode.EXTERNAL_SERVICE_ERROR, `ICP fee transfer failed: ${errDetails}`, {});
   }
 
   return { feePaidE8s: res.Ok ? BigInt(res.Ok) : feeE8s };
@@ -275,10 +360,7 @@ async function createAndInstallWithCyclesWallet(
 
   const walletId = treasuryCyclesWalletId();
   if (!walletId) {
-    throw new AppError(
-      ErrorCode.UNAUTHORIZED_ACCESS,
-      "Treasury cycles wallet canister ID not configured"
-    );
+    throw new AppError(ErrorCode.UNAUTHORIZED_ACCESS, "Treasury cycles wallet canister ID not configured");
   }
 
   const treasuryIdentity = parseTreasuryDelegationIdentity();
@@ -286,13 +368,13 @@ async function createAndInstallWithCyclesWallet(
 
   const wallet = Actor.createActor(cyclesWalletIdlFactory, {
     agent: treasuryAgent,
-    canisterId: Principal.fromText(walletId)
+    canisterId: Principal.fromText(walletId),
   }) as ActorSubclass<any>;
 
   log.info("Creating canister via cycles wallet", {
     walletId,
     cycles: cycles.toString(),
-    owner: owner.toText()
+    owner: owner.toText(),
   });
 
   const created = await wallet.wallet_create_canister({
@@ -300,9 +382,9 @@ async function createAndInstallWithCyclesWallet(
       controllers: [owner],
       compute_allocation: [],
       memory_allocation: [],
-      freezing_threshold: []
+      freezing_threshold: [],
     },
-    cycles
+    cycles,
   });
 
   const canisterId: Principal = created.canister_id;
@@ -312,7 +394,7 @@ async function createAndInstallWithCyclesWallet(
     mode: { install: null },
     canister_id: canisterId,
     wasm_module: wasmModule,
-    arg: initArgs
+    arg: initArgs,
   });
 
   return { canisterId, cyclesUsed: cycles };
@@ -363,18 +445,13 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         .boolean(req.isBurnable, "isBurnable");
 
       if (!validator.isValid()) {
-        throw new AppError(
-          ErrorCode.VALIDATION_ERROR,
-          "Invalid deployment parameters",
-          { errors: validator.getErrors() }
-        );
+        throw new AppError(ErrorCode.VALIDATION_ERROR, "Invalid deployment parameters", {
+          errors: validator.getErrors(),
+        });
       }
 
       if (!req.delegationIdentity) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Valid delegation identity is required"
-        );
+        throw new AppError(ErrorCode.INVALID_DELEGATION, "Valid delegation identity is required");
       }
 
       // Step 1: Collect user creation fee (ICP) using user's delegation
@@ -392,7 +469,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         totalSupply: BigInt(req.totalSupply),
         owner: req.ownerPrincipal,
         isMintable: req.isMintable,
-        isBurnable: req.isBurnable
+        isBurnable: req.isBurnable,
       });
 
       // Step 2-3: Create & install via Treasury Cycles Wallet, else fallback to management canister if not configured
@@ -412,7 +489,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         // Fallback path (no cycles attached) — not recommended for production
         const management = Actor.createActor(managementIdlFactory, {
           agent: userAgent,
-          canisterId: Principal.fromText("aaaaa-aa")
+          canisterId: Principal.fromText("aaaaa-aa"),
         }) as ActorSubclass<any>;
 
         const createResult = await management.create_canister({
@@ -420,8 +497,8 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
             controllers: [Principal.fromText(req.ownerPrincipal)],
             compute_allocation: [],
             memory_allocation: [],
-            freezing_threshold: []
-          }
+            freezing_threshold: [],
+          },
         });
 
         canisterId = createResult.canister_id;
@@ -429,7 +506,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
           mode: { install: null },
           canister_id: canisterId,
           wasm_module: wasmModule,
-          arg: initArgs
+          arg: initArgs,
         });
         cyclesUsed = BigInt(deployCyclesAmount() || "0");
       }
@@ -443,7 +520,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         }
         const management = Actor.createActor(managementIdlFactory, {
           agent,
-          canisterId: Principal.fromText("aaaaa-aa")
+          canisterId: Principal.fromText("aaaaa-aa"),
         }) as ActorSubclass<any>;
         const status = await management.canister_status({ canister_id: canisterId });
         const statusKey = Object.keys(status.status)[0];
@@ -453,7 +530,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
       } catch (error) {
         log.warn("Failed to verify canister status", {
           canisterId: canisterId.toText(),
-          error: error instanceof Error ? error.message : "Unknown"
+          error: error instanceof Error ? error.message : "Unknown",
         });
       }
 
@@ -471,7 +548,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         status: "deployed",
         deploymentHash,
         cyclesUsed: cyclesStr,
-        feePaidICP: feeICPStr
+        feePaidICP: feeICPStr,
       };
     } catch (error) {
       metrics.increment("canister.deploy_failed");
@@ -507,13 +584,13 @@ export const getStatus = api<{ canisterId: string }, CanisterStatus>(
               return false;
             }
           },
-          message: "Invalid canister ID format"
+          message: "Invalid canister ID format",
         })
         .throwIfInvalid();
 
       // Create agent (unauthenticated for status queries)
       const agent = new HttpAgent({
-        host: icpHost() || "https://ic0.app"
+        host: icpHost() || "https://ic0.app",
       });
 
       const host = icpHost() || "https://ic0.app";
@@ -523,7 +600,7 @@ export const getStatus = api<{ canisterId: string }, CanisterStatus>(
 
       const management = Actor.createActor(managementIdlFactory, {
         agent,
-        canisterId: Principal.fromText("aaaaa-aa")
+        canisterId: Principal.fromText("aaaaa-aa"),
       }) as ActorSubclass<any>;
 
       const status = await withBackoff(
@@ -544,7 +621,7 @@ export const getStatus = api<{ canisterId: string }, CanisterStatus>(
         moduleHash: status.module_hash?.[0]
           ? Buffer.from(status.module_hash[0]).toString("hex")
           : undefined,
-        controllers
+        controllers,
       };
     } catch (error) {
       return handleError(error as Error, "icp.getStatus");
@@ -579,7 +656,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         .required(req.operation, "operation")
         .custom(req.operation, {
           validate: (op) => ["mint", "burn", "transfer"].includes(op),
-          message: "Invalid operation type"
+          message: "Invalid operation type",
         })
         .required(req.amount, "amount")
         .custom(req.amount, {
@@ -591,7 +668,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
               return false;
             }
           },
-          message: "Amount must be a positive integer"
+          message: "Amount must be a positive integer",
         })
         .required(req.ownerPrincipal, "ownerPrincipal")
         .principal(req.ownerPrincipal, "ownerPrincipal");
@@ -601,11 +678,9 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
       }
 
       if (!validator.isValid()) {
-        throw new AppError(
-          ErrorCode.VALIDATION_ERROR,
-          "Invalid operation parameters",
-          { errors: validator.getErrors() }
-        );
+        throw new AppError(ErrorCode.VALIDATION_ERROR, "Invalid operation parameters", {
+          errors: validator.getErrors(),
+        });
       }
 
       if (!req.delegationIdentity) {
@@ -629,7 +704,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
       // Create appropriate actor using proper IDL factories
       const tokenActor = Actor.createActor(isLedger ? icrc1LedgerIdlFactory : icrc1IdlFactory, {
         agent,
-        canisterId: targetCanister
+        canisterId: targetCanister,
       }) as ActorSubclass<any>;
 
       // Validate methods are available on the WASM (runtime safety)
@@ -639,10 +714,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         if (req.operation === "burn") required.add("burn");
         for (const m of required) {
           if (typeof (tokenActor as any)[m] !== "function") {
-            throw new AppError(
-              ErrorCode.CANISTER_ERROR,
-              `Canister does not expose required method: ${m}`
-            );
+            throw new AppError(ErrorCode.CANISTER_ERROR, `Canister does not expose required method: ${m}`);
           }
         }
       }
@@ -650,7 +722,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
       const amount = BigInt(req.amount);
       const ownerAccount = {
         owner: Principal.fromText(req.ownerPrincipal),
-        subaccount: []
+        subaccount: [],
       };
 
       let result: any;
@@ -662,11 +734,11 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
           }
           const mintToAccount = {
             owner: Principal.fromText(req.recipient!),
-            subaccount: []
+            subaccount: [],
           };
           result = await (tokenActor as any).mint({
             to: mintToAccount,
-            amount
+            amount,
           });
           break;
 
@@ -676,14 +748,14 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
           }
           result = await (tokenActor as any).burn({
             from: ownerAccount,
-            amount
+            amount,
           });
           break;
 
         case "transfer":
           const transferToAccount = {
             owner: Principal.fromText(req.recipient!),
-            subaccount: []
+            subaccount: [],
           };
           result = await (tokenActor as any).icrc1_transfer({
             from_subaccount: [],
@@ -691,7 +763,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
             amount,
             fee: [],
             memo: [],
-            created_at_time: []
+            created_at_time: [],
           });
           break;
 
@@ -730,7 +802,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         success,
         transactionId,
         newBalance,
-        blockIndex: transactionId
+        blockIndex: transactionId,
       };
     } catch (error) {
       metrics.increment("token.operation_failed");
@@ -770,13 +842,13 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
               return false;
             }
           },
-          message: "Invalid canister ID format"
+          message: "Invalid canister ID format",
         })
         .throwIfInvalid();
 
       // Create agent (unauthenticated for queries)
       const agent = new HttpAgent({
-        host: icpHost() || "https://ic0.app"
+        host: icpHost() || "https://ic0.app",
       });
 
       const host = icpHost() || "https://ic0.app";
@@ -786,7 +858,7 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
 
       const tokenActor = Actor.createActor(icrc1IdlFactory, {
         agent,
-        canisterId: Principal.fromText(req.canisterId)
+        canisterId: Principal.fromText(req.canisterId),
       }) as ActorSubclass<any>;
 
       // Fetch token information with timeout and retry
@@ -796,36 +868,39 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
           tokenActor.icrc1_symbol(),
           tokenActor.icrc1_decimals(),
           tokenActor.icrc1_total_supply(),
-          tokenActor.icrc1_metadata()
+          tokenActor.icrc1_metadata(),
         ]);
       };
 
       const withTimeout = <T>(p: Promise<T>, ms: number) =>
         new Promise<T>((resolve, reject) => {
           const to = setTimeout(() => reject(new Error("Request timeout")), ms);
-          p.then((v) => {
-            clearTimeout(to);
-            resolve(v);
-          }, (e) => {
-            clearTimeout(to);
-            reject(e);
-          });
+          p.then(
+            (v) => {
+              clearTimeout(to);
+              resolve(v);
+            },
+            (e) => {
+              clearTimeout(to);
+              reject(e);
+            }
+          );
         });
 
-      const [name, symbol, decimals, totalSupply, metadata] = await withBackoff(
+      const [name, symbol, decimals, totalSupply, metadata] = (await withBackoff(
         () => withTimeout(fetchPromise(), 30000),
         3,
         500
-      ) as any[];
+      )) as any[];
 
       // Extract transfer fee from metadata
       const transferFeeEntry = metadata.find(([key]: [string, any]) => key === "icrc1:fee");
-      const transferFee = transferFeeEntry ? (transferFeeEntry[1].Nat?.toString?.() || "0") : "0";
+      const transferFee = transferFeeEntry ? transferFeeEntry[1].Nat?.toString?.() || "0" : "0";
 
       // Convert metadata tuples to MetadataEntry objects
       const metadataEntries: MetadataEntry[] = metadata.map(([key, value]: [string, any]) => ({
         key,
-        value
+        value,
       }));
 
       return {
@@ -834,7 +909,7 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
         decimals,
         totalSupply: totalSupply.toString(),
         transferFee,
-        metadata: metadataEntries
+        metadata: metadataEntries,
       };
     } catch (error) {
       return handleError(error as Error, "icp.getTokenInfo");
@@ -870,20 +945,20 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
             return false;
           }
         },
-        message: "Invalid principal format"
+        message: "Invalid principal format",
       });
 
       if (req.subaccount) {
         validator.custom(req.subaccount, {
           validate: (sub) => /^[0-9a-fA-F]+$/.test(sub) && sub.length <= 64,
-          message: "Invalid subaccount format"
+          message: "Invalid subaccount format",
         });
       }
 
       validator.throwIfInvalid();
 
       const agent = new HttpAgent({
-        host: icpHost() || "https://ic0.app"
+        host: icpHost() || "https://ic0.app",
       });
 
       const host = icpHost() || "https://ic0.app";
@@ -896,29 +971,29 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
 
       const tokenActor = Actor.createActor(icrc1LedgerIdlFactory, {
         agent,
-        canisterId: targetCanister
+        canisterId: targetCanister,
       }) as ActorSubclass<any>;
 
       const account = {
         owner: Principal.fromText(req.principal),
-        subaccount: req.subaccount ? [new Uint8Array(Buffer.from(req.subaccount, "hex"))] : []
+        subaccount: req.subaccount ? [new Uint8Array(Buffer.from(req.subaccount, "hex"))] : [],
       };
 
       const balance = await withBackoff(() => tokenActor.icrc1_balance_of(account), 3, 500);
 
       return {
-        balance: balance.toString()
+        balance: balance.toString(),
       };
     } catch (error) {
       log.error("Failed to get balance", {
         canisterId: req.canisterId,
         principal: req.principal,
-        error: error instanceof Error ? error.message : "Unknown"
+        error: error instanceof Error ? error.message : "Unknown",
       });
 
       // Return default balance instead of throwing
       return {
-        balance: "0"
+        balance: "0",
       };
     }
   })

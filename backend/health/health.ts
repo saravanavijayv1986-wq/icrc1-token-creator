@@ -36,6 +36,20 @@ healthChecker.addCheck('analytics_database', async () => {
   }
 });
 
+healthChecker.addCheck('rate_limits_table', async () => {
+  try {
+    // Verify the rate_limits table exists and is accessible
+    // We attempt a simple query; if the table doesn't exist this will throw.
+    await tokenDB.queryRow`SELECT limiter_name FROM rate_limits LIMIT 1`;
+    return { status: 'pass', message: 'rate_limits table exists' };
+  } catch (error) {
+    return {
+      status: 'fail',
+      message: `rate_limits table missing or inaccessible: ${error instanceof Error ? error.message : 'Unknown error'}`
+    };
+  }
+});
+
 healthChecker.addCheck('memory', async () => {
   const memUsage = process.memoryUsage();
   const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
