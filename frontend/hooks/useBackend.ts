@@ -18,14 +18,17 @@ function isValidPrincipal(principal: string): boolean {
     return false;
   }
   
-  // Basic IC principal format validation
-  // Principals are base32-encoded and typically follow patterns like:
-  // - Short form: "2vxsx-fae" (2-5 chars, dash, 3 chars)
-  // - Long form: "rrkah-fqaaa-aaaah-qcuea-cai" (5-5-5-5-3 pattern)
-  // - Can also be other lengths but must contain only valid base32 chars and dashes
-  const principalPattern = /^[a-z0-9]+-[a-z0-9]+-?[a-z0-9]*-?[a-z0-9]*-?[a-z0-9]*$/;
+  // More flexible IC principal format validation
+  // Principals can have various formats:
+  // - Short form: "2vxsx-fae" 
+  // - Long form: "rrkah-fqaaa-aaaah-qcuea-cai"
+  // - Various canister formats
+  const principalPattern = /^[a-z0-9]+([-][a-z0-9]+)*$/;
   
-  return principalPattern.test(principal) && principal.length >= 5 && principal.length <= 63;
+  return principalPattern.test(principal) && 
+         principal.length >= 5 && 
+         principal.length <= 63 &&
+         principal.includes('-'); // All valid principals contain at least one dash
 }
 
 export function useBackend() {
@@ -36,11 +39,13 @@ export function useBackend() {
       return backend;
     }
 
-    // Return backend client with authentication
+    // Return backend client with proper authentication using the delegation identity
     return backend.with({
       auth: async () => {
+        // Use the delegation identity JSON for authentication
+        const delegationJson = delegationIdentity.toJSON();
         return {
-          authorization: `Bearer ${principal}`,
+          delegationIdentity: delegationJson,
         };
       },
     });
@@ -188,8 +193,8 @@ export function useBackend() {
   const getICPBalance = useCallback(async (
     targetPrincipal: string
   ) => {
-    // Validate principal format first
-    if (!targetPrincipal || !isValidPrincipal(targetPrincipal)) {
+    // Basic principal validation first - be more lenient
+    if (!targetPrincipal || typeof targetPrincipal !== 'string' || targetPrincipal.length < 5) {
       console.warn("Invalid principal format for ICP balance query:", targetPrincipal);
       return {
         balance: "0",
@@ -198,13 +203,15 @@ export function useBackend() {
     }
 
     try {
-      const authenticatedBackend = getAuthenticatedBackend();
+      // Use either authenticated or unauthenticated backend for balance queries
+      // Balance queries can often be done without authentication
+      const backendClient = getAuthenticatedBackend();
       
       // Use retry mechanism for better reliability
       const result = await withRetry(async () => {
         // Use the configured ICP Ledger Canister ID from the backend
         // The backend will use the secret ICPLedgerCanisterId you configured
-        return await authenticatedBackend.icp.getBalance({ 
+        return await backendClient.icp.getBalance({ 
           canisterId: "dummy", // This will be replaced by the backend with the actual ledger canister ID
           principal: targetPrincipal
         });
@@ -241,6 +248,8 @@ export function useBackend() {
           errorMessage = "Authentication error";
         } else if (error.message.includes("canister") || error.message.includes("replica")) {
           errorMessage = "Blockchain network error";
+        } else if (error.message.includes("principal") || error.message.includes("invalid")) {
+          errorMessage = "Invalid wallet principal format";
         } else {
           errorMessage = error.message;
         }

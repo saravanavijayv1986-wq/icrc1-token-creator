@@ -32,7 +32,7 @@ export default function CreateTokenPage() {
   const { createToken, getICPBalance, isConnected, principal } = useBackend();
 
   // Fetch ICP balance when connected - with improved error handling
-  const { data: icpBalance, isLoading: balanceLoading, error: balanceError } = useQuery({
+  const { data: icpBalance, isLoading: balanceLoading, error: balanceError, refetch: refetchBalance } = useQuery({
     queryKey: ["icp-balance", principal],
     queryFn: async () => {
       if (!principal) return null;
@@ -240,11 +240,27 @@ export default function CreateTokenPage() {
     }
     
     if (balanceError) {
-      return <span className="text-red-600 text-sm">Connection error</span>;
+      return (
+        <div className="flex items-center space-x-2">
+          <span className="text-red-600 text-sm">Connection error</span>
+          <Button variant="ghost" size="sm" onClick={() => refetchBalance()}>
+            Retry
+          </Button>
+        </div>
+      );
     }
     
     if (icpBalance?.error) {
-      return <span className="text-red-600 text-sm">Failed to load</span>;
+      return (
+        <div className="flex items-center space-x-2">
+          <span className="text-red-600 text-sm">
+            {icpBalance.error === "Invalid principal format" ? "Wallet error" : "Failed to load"}
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => refetchBalance()}>
+            Retry
+          </Button>
+        </div>
+      );
     }
     
     if (icpBalance && icpBalance.balance) {
@@ -339,15 +355,20 @@ export default function CreateTokenPage() {
               {/* Balance error message */}
               {(balanceError || icpBalance?.error) && (
                 <div className="p-3 rounded-lg bg-yellow-100 border border-yellow-200">
-                  <div className="flex items-center space-x-2">
-                    <AlertTriangle className="h-5 w-5 text-yellow-600" />
-                    <span className="text-yellow-800 font-medium">
-                      {icpBalance?.error === "Network connection error" 
-                        ? "Network error fetching balance. Please check your connection and try again."
-                        : icpBalance?.error === "Invalid principal format"
-                        ? "Invalid wallet principal format. Please reconnect your wallet."
-                        : "Unable to fetch ICP balance. You can still proceed with token creation."}
-                    </span>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                      <span className="text-yellow-800 font-medium">
+                        {icpBalance?.error === "Network connection error" 
+                          ? "Network error fetching balance. Please check your connection and try again."
+                          : icpBalance?.error === "Invalid principal format" || icpBalance?.error === "Invalid wallet principal format"
+                          ? "Invalid wallet principal format. Please reconnect your wallet."
+                          : "Unable to fetch ICP balance. You can still proceed with token creation."}
+                      </span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => refetchBalance()}>
+                      Retry
+                    </Button>
                   </div>
                 </div>
               )}
