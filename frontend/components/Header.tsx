@@ -67,6 +67,14 @@ export default function Header() {
             >
               Analytics
             </Link>
+            <Link 
+              to="/monitoring" 
+              className={`text-foreground hover:text-primary transition-colors ${
+                isActive('/monitoring') ? 'text-primary font-medium' : ''
+              }`}
+            >
+              Monitoring
+            </Link>
           </nav>
 
           <div className="flex items-center space-x-4">

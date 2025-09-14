@@ -6,6 +6,7 @@ import { validate } from "../common/validation";
 import { handleError, ErrorCode, AppError } from "../common/errors";
 import { tokenCreationLimiter } from "../common/rate-limiter";
 import { metrics, monitor } from "../common/monitoring";
+import { initializeMonitoring } from "../monitoring/monitoring_api";
 import log from "encore.dev/log";
 import crypto from "node:crypto";
 import { z } from "zod";
@@ -209,6 +210,9 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             updated_at = NOW()
           WHERE id = ${tokenRow.id}
         `;
+
+        // Initialize monitoring for the new canister
+        await initializeMonitoring(tokenRow.id, deployResult.canisterId);
 
         // Log creation transaction with structured metadata
         const transactionId = deployResult.deploymentHash;

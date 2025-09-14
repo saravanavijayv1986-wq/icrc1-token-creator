@@ -10,6 +10,7 @@ import SearchPage from "./pages/SearchPage";
 import CreateTokenPage from "./pages/CreateTokenPage";
 import DashboardPage from "./pages/DashboardPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import MonitoringPage from "./pages/MonitoringPage";
 import TokenDetailsPage from "./pages/TokenDetailsPage";
 import { environment, performanceConfig } from "./config";
 
@@ -53,6 +54,7 @@ export default function App() {
                   <Route path="/create" element={<CreateTokenPage />} />
                   <Route path="/dashboard" element={<DashboardPage />} />
                   <Route path="/analytics" element={<AnalyticsPage />} />
+                  <Route path="/monitoring" element={<MonitoringPage />} />
                   <Route path="/tokens/:id" element={<TokenDetailsPage />} />
                 </Routes>
               </main>
