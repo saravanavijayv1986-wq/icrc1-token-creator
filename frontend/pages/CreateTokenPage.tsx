@@ -31,7 +31,7 @@ export default function CreateTokenPage() {
   const { toast } = useToast();
   const { createToken, getICPBalance, isConnected, principal } = useBackend();
 
-  // Fetch ICP balance when connected - with better error handling
+  // Fetch ICP balance when connected - with improved error handling
   const { data: icpBalance, isLoading: balanceLoading, error: balanceError } = useQuery({
     queryKey: ["icp-balance", principal],
     queryFn: async () => {
@@ -47,7 +47,17 @@ export default function CreateTokenPage() {
     },
     enabled: !!principal && isConnected,
     refetchInterval: 30000, // Refresh every 30 seconds
-    retry: false, // Don't retry failed balance requests
+    retry: (failureCount, error) => {
+      // Only retry on network errors, not on validation errors
+      if (error && typeof error === 'object' && 'message' in error) {
+        const errorMessage = (error as Error).message.toLowerCase();
+        if (errorMessage.includes('invalid principal') || errorMessage.includes('validation')) {
+          return false; // Don't retry validation errors
+        }
+      }
+      return failureCount < 2; // Retry up to 2 times for other errors
+    },
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000), // Exponential backoff with max 5s
   });
 
   const createTokenMutation = useMutation({
@@ -173,7 +183,7 @@ export default function CreateTokenPage() {
     }
 
     // Check if user has sufficient ICP balance
-    if (icpBalance && icpBalance.balance) {
+    if (icpBalance && icpBalance.balance && !icpBalance.error) {
       const balanceICP = parseInt(icpBalance.balance) / 100000000; // Convert from e8s to ICP
       const requiredICP = parseFloat(tokenConfig.fees.creationFeeICP);
       
@@ -219,9 +229,30 @@ export default function CreateTokenPage() {
   };
 
   // Check if user has sufficient balance
-  const hasSufficientBalance = icpBalance && icpBalance.balance ? 
+  const hasSufficientBalance = icpBalance && icpBalance.balance && !icpBalance.error ? 
     (parseInt(icpBalance.balance) / 100000000) >= parseFloat(tokenConfig.fees.creationFeeICP) : 
     false;
+
+  // Determine balance display state
+  const getBalanceDisplay = () => {
+    if (balanceLoading) {
+      return <Loader2 className="h-6 w-6 animate-spin inline" />;
+    }
+    
+    if (balanceError) {
+      return <span className="text-red-600 text-sm">Connection error</span>;
+    }
+    
+    if (icpBalance?.error) {
+      return <span className="text-red-600 text-sm">Failed to load</span>;
+    }
+    
+    if (icpBalance && icpBalance.balance) {
+      return `${formatICPBalance(icpBalance.balance)} ICP`;
+    }
+    
+    return "0.00000000 ICP";
+  };
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-2xl">
@@ -261,15 +292,7 @@ export default function CreateTokenPage() {
                   <div className="flex items-center space-x-2">
                     <DollarSign className="h-4 w-4 text-blue-600" />
                     <span className="text-2xl font-bold text-blue-900">
-                      {balanceLoading ? (
-                        <Loader2 className="h-6 w-6 animate-spin inline" />
-                      ) : balanceError ? (
-                        <span className="text-red-600 text-sm">Failed to load</span>
-                      ) : icpBalance && icpBalance.balance ? (
-                        `${formatICPBalance(icpBalance.balance)} ICP`
-                      ) : (
-                        "0.00000000 ICP"
-                      )}
+                      {getBalanceDisplay()}
                     </span>
                   </div>
                 </div>
@@ -289,7 +312,7 @@ export default function CreateTokenPage() {
               </div>
 
               {/* Balance Status */}
-              {icpBalance && icpBalance.balance && (
+              {icpBalance && icpBalance.balance && !icpBalance.error && (
                 <div className={`p-3 rounded-lg flex items-center space-x-2 ${
                   hasSufficientBalance 
                     ? 'bg-green-100 border border-green-200' 
@@ -314,12 +337,16 @@ export default function CreateTokenPage() {
               )}
 
               {/* Balance error message */}
-              {balanceError && (
+              {(balanceError || icpBalance?.error) && (
                 <div className="p-3 rounded-lg bg-yellow-100 border border-yellow-200">
                   <div className="flex items-center space-x-2">
                     <AlertTriangle className="h-5 w-5 text-yellow-600" />
                     <span className="text-yellow-800 font-medium">
-                      Unable to fetch ICP balance. You can still proceed with token creation.
+                      {icpBalance?.error === "Network connection error" 
+                        ? "Network error fetching balance. Please check your connection and try again."
+                        : icpBalance?.error === "Invalid principal format"
+                        ? "Invalid wallet principal format. Please reconnect your wallet."
+                        : "Unable to fetch ICP balance. You can still proceed with token creation."}
                     </span>
                   </div>
                 </div>
@@ -560,7 +587,7 @@ export default function CreateTokenPage() {
                 <div className="flex justify-between">
                   <span>Balance After:</span>
                   <span className="font-semibold">
-                    {icpBalance && icpBalance.balance ? 
+                    {icpBalance && icpBalance.balance && !icpBalance.error ? 
                       `${(parseFloat(formatICPBalance(icpBalance.balance)) - parseFloat(tokenConfig.fees.creationFeeICP)).toFixed(8)} ICP` : 
                       "Calculate after connection"
                     }
@@ -577,7 +604,7 @@ export default function CreateTokenPage() {
               type="submit"
               className="w-full"
               size="lg"
-              disabled={createTokenMutation.isPending || !isConnected || isValidating || (icpBalance && icpBalance.balance && !hasSufficientBalance)}
+              disabled={createTokenMutation.isPending || !isConnected || isValidating || (icpBalance && icpBalance.balance && !icpBalance.error && !hasSufficientBalance)}
             >
               {createTokenMutation.isPending ? (
                 <>
@@ -603,7 +630,7 @@ export default function CreateTokenPage() {
               </p>
             )}
 
-            {isConnected && icpBalance && icpBalance.balance && !hasSufficientBalance && (
+            {isConnected && icpBalance && icpBalance.balance && !icpBalance.error && !hasSufficientBalance && (
               <p className="text-center text-sm text-red-600">
                 Insufficient ICP balance. You need {tokenConfig.fees.creationFeeICP} ICP to create a token.
               </p>
