@@ -88,13 +88,46 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
   }
 }
 
-// Try to reconstruct a SignIdentity from provided data.
+// Enhanced delegation validation and reconstruction
+function validateDelegationChain(delegationChain: any): boolean {
+  if (!delegationChain || typeof delegationChain !== 'object') {
+    return false;
+  }
+
+  // Check required fields for delegation chain
+  if (!Array.isArray(delegationChain.delegations) || !delegationChain.publicKey) {
+    return false;
+  }
+
+  // Validate each delegation in the chain
+  for (const delegation of delegationChain.delegations) {
+    if (!delegation.delegation || !delegation.signature) {
+      return false;
+    }
+
+    // Validate delegation structure
+    const del = delegation.delegation;
+    if (!del.pubkey || !del.expiration || !del.targets) {
+      return false;
+    }
+
+    // Check expiration (delegation should not be expired)
+    const expirationNs = typeof del.expiration === 'bigint' ? del.expiration : BigInt(del.expiration);
+    const nowNs = BigInt(Date.now()) * BigInt(1_000_000); // Convert to nanoseconds
+    if (expirationNs <= nowNs) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+// Try to reconstruct a SignIdentity from provided data with enhanced validation.
 // Supports the following formats:
 // - A JSON string or object produced by Ed25519KeyIdentity.toJSON()
 // - An object: { secretKey: "<hex-or-base64>" } or { privateKey: "<hex-or-base64>" }
 // - A raw string containing a hex or base64 Ed25519 secret key (32 or 64 bytes)
-// - A JSON object produced by DelegationIdentity.toJSON() BUT ONLY if it also includes an "identity" field
-//   containing an Ed25519KeyIdentity JSON or a secret key. The delegation chain alone is not sufficient.
+// - A JSON object produced by DelegationIdentity.toJSON() WITH proper validation
 // - The literal string "anonymous" for testing only.
 export function toSignIdentity(identityData: unknown): SignIdentity {
   try {
@@ -125,7 +158,10 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
         }
       }
 
-      throw new Error("Unsupported identity string format");
+      throw new AppError(
+        ErrorCode.INVALID_DELEGATION,
+        "Unsupported identity string format"
+      );
     }
 
     const data: any = identityData;
@@ -146,12 +182,9 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
       return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
     }
 
-    // 4) DelegationIdentity-like JSON:
-    // Must contain the delegation chain AND an inner identity (via `identity` or keys).
+    // 4) Enhanced DelegationIdentity JSON validation and reconstruction
     if (data && (data.delegations || data.delegation || data.publicKey)) {
-      // Infer delegation chain JSON.
-      // The canonical format from DelegationIdentity.toJSON() is:
-      // { delegations: [...], publicKey: "<base64>" }
+      // Validate the delegation chain structure first
       let chainObj: any = null;
       if (data.delegations && data.publicKey) {
         chainObj = { delegations: data.delegations, publicKey: data.publicKey };
@@ -163,9 +196,32 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
         chainObj = data;
       }
 
-      const chain = DelegationChain.fromJSON(chainObj);
+      // Validate delegation chain before reconstruction
+      if (!validateDelegationChain(chainObj)) {
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Invalid or expired delegation chain",
+          {
+            hint: "The delegation chain is malformed or has expired. Please reconnect your wallet.",
+          }
+        );
+      }
 
-      // Reconstruct inner identity
+      let chain: DelegationChain;
+      try {
+        chain = DelegationChain.fromJSON(chainObj);
+      } catch (error) {
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Failed to reconstruct delegation chain",
+          {
+            reason: error instanceof Error ? error.message : String(error),
+            hint: "The delegation data format is incompatible. Please reconnect your wallet.",
+          }
+        );
+      }
+
+      // Reconstruct inner identity with enhanced validation
       let inner: SignIdentity | null = null;
 
       if (data.identity) {
@@ -175,35 +231,97 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
         } catch {
           // try raw key on nested identity
           const nestedKey = data.identity.secretKey ?? data.identity.privateKey;
-          if (nestedKey) {
-            const cleaned = String(nestedKey).replace(/^0x/, "");
-            const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
-            const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(String(nestedKey), "base64");
-            inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+          if (nestedKey && typeof nestedKey === 'string') {
+            try {
+              const cleaned = String(nestedKey).replace(/^0x/, "");
+              const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
+              const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(String(nestedKey), "base64");
+              inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+            } catch (keyError) {
+              log.warn("Failed to reconstruct nested identity from key", {
+                error: keyError instanceof Error ? keyError.message : String(keyError)
+              });
+            }
           }
         }
       }
 
       // Fallback to root-level key fields
       if (!inner && (data.secretKey || data.privateKey || data.sk)) {
-        const k = String(data.secretKey ?? data.privateKey ?? data.sk);
-        const cleaned = k.replace(/^0x/, "");
-        const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
-        const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(k, "base64");
-        inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+        try {
+          const k = String(data.secretKey ?? data.privateKey ?? data.sk);
+          const cleaned = k.replace(/^0x/, "");
+          const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
+          const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(k, "base64");
+          inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+        } catch (keyError) {
+          log.warn("Failed to reconstruct identity from root-level key", {
+            error: keyError instanceof Error ? keyError.message : String(keyError)
+          });
+        }
       }
 
       if (!inner) {
         throw new AppError(
           ErrorCode.INVALID_DELEGATION,
-          "Delegation chain provided without inner identity",
+          "Delegation chain provided without valid inner identity",
           {
             hint: "Include an 'identity' with Ed25519KeyIdentity JSON or a 'secretKey' field to reconstruct the signer.",
           }
         );
       }
 
-      return DelegationIdentity.fromDelegation(inner, chain);
+      // Validate that the inner identity can properly sign
+      try {
+        const testMessage = new Uint8Array([1, 2, 3, 4]);
+        const signature = inner.sign(testMessage);
+        if (!signature || signature.length === 0) {
+          throw new Error("Identity cannot produce valid signatures");
+        }
+      } catch (signError) {
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Inner identity lacks proper signing capabilities",
+          {
+            reason: signError instanceof Error ? signError.message : String(signError),
+            hint: "The identity cannot sign messages. Please reconnect your wallet.",
+          }
+        );
+      }
+
+      // Create and validate DelegationIdentity
+      let delegationIdentity: DelegationIdentity;
+      try {
+        delegationIdentity = DelegationIdentity.fromDelegation(inner, chain);
+      } catch (error) {
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Failed to create delegation identity",
+          {
+            reason: error instanceof Error ? error.message : String(error),
+            hint: "The delegation chain and inner identity are incompatible.",
+          }
+        );
+      }
+
+      // Final validation: ensure the delegation identity can get principal
+      try {
+        const principal = delegationIdentity.getPrincipal();
+        if (!principal || principal.toText().length === 0) {
+          throw new Error("Invalid principal");
+        }
+      } catch (principalError) {
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Delegation identity has invalid principal",
+          {
+            reason: principalError instanceof Error ? principalError.message : String(principalError),
+            hint: "The delegation identity cannot provide a valid principal.",
+          }
+        );
+      }
+
+      return delegationIdentity;
     }
 
     // 5) Explicit request for anonymous identity
@@ -217,6 +335,9 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
       { reason: "Unrecognized identity structure" }
     );
   } catch (e) {
+    if (e instanceof AppError) {
+      throw e;
+    }
     throw new AppError(
       ErrorCode.INVALID_DELEGATION,
       "Invalid or unsupported delegation identity",
@@ -243,12 +364,47 @@ async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 5
 // Create authenticated agent with proper error handling and retries
 export async function createAuthenticatedAgent(identityInput: any, retries = 3): Promise<HttpAgent> {
   return await withBackoff(async () => {
-    const identity = toSignIdentity(identityInput);
+    let identity: SignIdentity;
+    
+    try {
+      identity = toSignIdentity(identityInput);
+    } catch (error) {
+      // Enhance error message for delegation issues
+      if (error instanceof AppError && error.code === ErrorCode.INVALID_DELEGATION) {
+        log.error("Failed to reconstruct delegation identity", {
+          error: error.message,
+          details: error.details,
+        });
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Authentication failed: Invalid delegation identity",
+          {
+            originalError: error.message,
+            hint: "Please reconnect your wallet and try again. Your session may have expired.",
+          }
+        );
+      }
+      throw error;
+    }
+
     const host = icpHost() || "https://ic0.app";
-    const agent = new HttpAgent({
-      host,
-      identity,
-    });
+    
+    let agent: HttpAgent;
+    try {
+      agent = new HttpAgent({
+        host,
+        identity,
+      });
+    } catch (error) {
+      throw new AppError(
+        ErrorCode.INVALID_DELEGATION,
+        "Failed to create authenticated agent",
+        {
+          reason: error instanceof Error ? error.message : String(error),
+          hint: "Please check your network connection and try again.",
+        }
+      );
+    }
 
     // Configure agent with production settings
     agent.addTransform("update", ({ body }) => ({
@@ -257,7 +413,35 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
     }));
 
     if (host.includes("localhost") || host.includes("127.0.0.1")) {
-      await agent.fetchRootKey();
+      try {
+        await agent.fetchRootKey();
+      } catch (error) {
+        throw new AppError(
+          ErrorCode.EXTERNAL_SERVICE_ERROR,
+          "Failed to fetch root key for local development",
+          {
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        );
+      }
+    }
+
+    // Test the agent by getting the principal
+    try {
+      const principal = identity.getPrincipal();
+      log.info("Authenticated agent created successfully", {
+        principal: principal.toText(),
+        host,
+      });
+    } catch (error) {
+      throw new AppError(
+        ErrorCode.INVALID_DELEGATION,
+        "Agent authentication test failed",
+        {
+          reason: error instanceof Error ? error.message : String(error),
+          hint: "The identity cannot provide a valid principal.",
+        }
+      );
     }
 
     return agent;
@@ -555,6 +739,17 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
           });
           metrics.increment("canister.deploy_fee_bypassed");
         } else {
+          // Re-throw with enhanced error context
+          if (feeErr instanceof AppError && feeErr.code === ErrorCode.INVALID_DELEGATION) {
+            throw new AppError(
+              ErrorCode.INVALID_DELEGATION,
+              "Failed to authenticate for fee payment",
+              {
+                originalError: feeErr.message,
+                hint: "Please reconnect your wallet and ensure your session hasn't expired.",
+              }
+            );
+          }
           throw feeErr;
         }
       }
@@ -789,7 +984,7 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         );
       }
 
-      // Create authenticated agent
+      // Create authenticated agent with enhanced error handling
       const agent = await createAuthenticatedAgent(req.delegationIdentity);
 
       // Create appropriate actor using proper IDL factories
