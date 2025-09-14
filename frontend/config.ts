@@ -31,8 +31,8 @@ export const walletConfig = {
     // Identity provider canister ID
     canisterId: "rdmx6-jaaaa-aaaah-qca7q-cai", // Internet Identity canister
     
-    // Derivation origin for dev
-    derivationOrigin: isDevelopment ? "https://rdmx6-jaaaa-aaaah-qca7q-cai.ic0.app" : undefined,
+    // Derivation origin for non-production environments to ensure consistent principals.
+    derivationOrigin: isDevelopment ? window.location.origin : undefined,
   },
 };
 
