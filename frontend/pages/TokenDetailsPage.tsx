@@ -15,6 +15,7 @@ import AnalyticsDashboard from "../components/AnalyticsDashboard";
 export default function TokenDetailsPage() {
   const { id } = useParams<{ id: string }>();
   const [mintAmount, setMintAmount] = useState("");
+  const [mintTo, setMintTo] = useState("");
   const [burnAmount, setBurnAmount] = useState("");
   const [transferAmount, setTransferAmount] = useState("");
   const [transferTo, setTransferTo] = useState("");
@@ -61,6 +62,7 @@ export default function TokenDetailsPage() {
       queryClient.invalidateQueries({ queryKey: ["transactions", tokenId] });
       queryClient.invalidateQueries({ queryKey: ["balance", tokenId, principal] });
       setMintAmount("");
+      setMintTo("");
     },
     onError: (error) => {
       console.error("Mint failed:", error);
@@ -276,7 +278,6 @@ export default function TokenDetailsPage() {
         </div>
       </div>
 
-      {/* Token Info Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
         <Card>
           <CardHeader className="pb-2">
@@ -344,7 +345,6 @@ export default function TokenDetailsPage() {
         </Card>
       </div>
 
-      {/* Warning for non-deployed tokens */}
       {token.status !== 'deployed' && (
         <Card className="mb-6 border-orange-200 bg-orange-50">
           <CardContent className="p-4">
@@ -358,7 +358,6 @@ export default function TokenDetailsPage() {
         </Card>
       )}
 
-      {/* Tabs for different actions */}
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -426,6 +425,15 @@ export default function TokenDetailsPage() {
                   </div>
                 )}
                 <div className="space-y-2">
+                  <Label htmlFor="mintTo">Recipient Principal</Label>
+                  <Input
+                    id="mintTo"
+                    placeholder="rrkah-fqaaa-aaaah-qcuea-cai"
+                    value={mintTo}
+                    onChange={(e) => setMintTo(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="mintAmount">Amount to Mint</Label>
                   <Input
                     id="mintAmount"
@@ -441,11 +449,11 @@ export default function TokenDetailsPage() {
                 <Button
                   onClick={() => {
                     const amount = parseInt(mintAmount);
-                    if (amount > 0 && principal) {
-                      mintMutation.mutate({ amount, to: principal });
+                    if (amount > 0 && mintTo) {
+                      mintMutation.mutate({ amount, to: mintTo });
                     }
                   }}
-                  disabled={!mintAmount || mintMutation.isPending || !isConnected}
+                  disabled={!mintAmount || !mintTo || mintMutation.isPending || !isConnected}
                   className="w-full"
                 >
                   <Plus className="mr-2 h-4 w-4" />

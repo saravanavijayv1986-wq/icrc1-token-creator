@@ -119,7 +119,6 @@ export default function WalletConnect() {
       return;
     }
 
-    // Basic principal validation
     const principalPattern = /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/;
     if (!principalPattern.test(transferTo)) {
       toast({

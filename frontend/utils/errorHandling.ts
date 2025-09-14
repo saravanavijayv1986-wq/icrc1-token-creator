@@ -20,7 +20,6 @@ export class AppError extends Error {
 export function handleApiError(error: any): never {
   console.error('API Error:', error);
 
-  // Extract error information
   let code = 'UNKNOWN_ERROR';
   let message = 'An unexpected error occurred';
   let details = null;
@@ -34,7 +33,6 @@ export function handleApiError(error: any): never {
     message = error.message;
   }
 
-  // Show user-friendly error message
   toast({
     title: "Error",
     description: getUserFriendlyMessage(code, message),
@@ -68,12 +66,25 @@ export function withErrorHandling<T extends any[], R>(
     try {
       return await fn(...args);
     } catch (error) {
-      return handleApiError(error);
+      if (error instanceof AppError) {
+        throw error;
+      }
+      
+      console.error('Operation failed:', error);
+      
+      const message = error instanceof Error ? error.message : String(error);
+      
+      toast({
+        title: "Operation Failed",
+        description: message,
+        variant: "destructive",
+      });
+      
+      throw new AppError('OPERATION_FAILED', message);
     }
   };
 }
 
-// Retry utility for operations that might fail due to network issues
 export async function withRetry<T>(
   operation: () => Promise<T>,
   maxRetries: number = 3,
@@ -91,7 +102,6 @@ export async function withRetry<T>(
         break;
       }
 
-      // Wait before retrying with exponential backoff
       await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, attempt - 1)));
     }
   }

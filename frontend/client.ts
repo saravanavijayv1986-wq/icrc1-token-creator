@@ -236,13 +236,6 @@ export namespace icp {
             this.performTokenOperation = this.performTokenOperation.bind(this)
         }
 
-        /**
-         * Deploys an ICRC-1 token canister to the Internet Computer.
-         * Flow:
-         * 1) Collect user fee in ICP to treasury ICP wallet.
-         * 2) Create canister via Treasury Cycles Wallet.
-         * 3) Install token code and initialize owned by user principal.
-         */
         public async deploy(params: RequestType<typeof api_icp_canister_deploy>): Promise<ResponseType<typeof api_icp_canister_deploy>> {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/icp/deploy`, {method: "POST", body: JSON.stringify(params)})
@@ -261,9 +254,6 @@ export namespace icp {
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_setup_ensureTreasuryWalletController>
         }
 
-        /**
-         * Gets the balance of a specific account.
-         */
         public async getBalance(params: RequestType<typeof api_icp_canister_getBalance>): Promise<ResponseType<typeof api_icp_canister_getBalance>> {
             // Convert our params into the objects we need for the request
             const query = makeRecord<string, string | string[]>({
@@ -275,27 +265,18 @@ export namespace icp {
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_canister_getBalance>
         }
 
-        /**
-         * Retrieves the current status of a deployed canister.
-         */
         public async getStatus(params: { canisterId: string }): Promise<ResponseType<typeof api_icp_canister_getStatus>> {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/icp/canister/${encodeURIComponent(params.canisterId)}/status`, {method: "GET", body: undefined})
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_canister_getStatus>
         }
 
-        /**
-         * Retrieves token information from the canister.
-         */
         public async getTokenInfo(params: { canisterId: string }): Promise<ResponseType<typeof api_icp_canister_getTokenInfo>> {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/icp/token/${encodeURIComponent(params.canisterId)}/info`, {method: "GET", body: undefined})
             return JSON.parse(await resp.text(), dateReviver) as ResponseType<typeof api_icp_canister_getTokenInfo>
         }
 
-        /**
-         * Performs token operations using the owner's delegation.
-         */
         public async performTokenOperation(params: RequestType<typeof api_icp_canister_performTokenOperation>): Promise<ResponseType<typeof api_icp_canister_performTokenOperation>> {
             // Now make the actual call to the API
             const resp = await this.baseClient.callTypedAPI(`/icp/operation`, {method: "POST", body: JSON.stringify(params)})

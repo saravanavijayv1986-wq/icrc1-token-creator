@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import { useWallet } from "./useWallet";
 import backend from "~backend/client";
-import { withErrorHandling, withRetry } from "../utils/errorHandling";
 
 function icpToE8s(amount: string | number): bigint {
   const str = String(amount).trim();
@@ -13,251 +12,24 @@ function icpToE8s(amount: string | number): bigint {
   return BigInt(intPart) * 100000000n + BigInt(fracPadded);
 }
 
-// Enhanced principal validation with specific error types
-enum PrincipalValidationError {
-  EMPTY = "EMPTY",
-  INVALID_TYPE = "INVALID_TYPE", 
-  TOO_SHORT = "TOO_SHORT",
-  TOO_LONG = "TOO_LONG",
-  INVALID_FORMAT = "INVALID_FORMAT",
-  INVALID_CHECKSUM = "INVALID_CHECKSUM"
-}
-
-interface PrincipalValidationResult {
-  isValid: boolean;
-  error?: PrincipalValidationError;
-  message?: string;
-}
-
-function validatePrincipal(principal: string): PrincipalValidationResult {
-  if (!principal) {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.EMPTY,
-      message: "Principal cannot be empty"
-    };
-  }
+function isValidPrincipal(principal: string): boolean {
+  if (!principal || typeof principal !== 'string') return false;
+  if (principal.length < 5 || principal.length > 63) return false;
+  if (!/^[a-z0-9-]+$/.test(principal)) return false;
+  if (!principal.includes('-')) return false;
   
-  if (typeof principal !== 'string') {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.INVALID_TYPE,
-      message: "Principal must be a string"
-    };
-  }
-  
-  // Basic length validation
-  if (principal.length < 5) {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.TOO_SHORT,
-      message: "Principal is too short"
-    };
-  }
-  
-  if (principal.length > 63) {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.TOO_LONG,
-      message: "Principal is too long"
-    };
-  }
-
-  // Format validation: must contain only lowercase letters, numbers, and hyphens
-  if (!/^[a-z0-9-]+$/.test(principal)) {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.INVALID_FORMAT,
-      message: "Principal contains invalid characters (only lowercase letters, numbers, and hyphens allowed)"
-    };
-  }
-
-  // Must contain at least one hyphen (all valid principals have separators)
-  if (!principal.includes('-')) {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.INVALID_FORMAT,
-      message: "Principal must contain hyphens as separators"
-    };
-  }
-
-  // Validate IC principal format patterns
-  // Short form: "2vxsx-fae" (minimum valid format)
-  // Long form: "rrkah-fqaaa-aaaah-qcuea-cai" (canister format)
   const shortPattern = /^[a-z0-9]{2,}-[a-z0-9]{3}$/;
   const longPattern = /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/;
   const mediumPattern = /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/;
   
-  if (!shortPattern.test(principal) && !longPattern.test(principal) && !mediumPattern.test(principal)) {
-    return {
-      isValid: false,
-      error: PrincipalValidationError.INVALID_FORMAT,
-      message: "Principal does not match expected IC format"
-    };
-  }
-
-  return { isValid: true };
+  return shortPattern.test(principal) || longPattern.test(principal) || mediumPattern.test(principal);
 }
 
-function isValidPrincipal(principal: string): boolean {
-  return validatePrincipal(principal).isValid;
-}
-
-// Enhanced error classification for balance queries
-enum BalanceErrorType {
-  NETWORK = "NETWORK",
-  TIMEOUT = "TIMEOUT", 
-  AUTHENTICATION = "AUTHENTICATION",
-  CANISTER_UNAVAILABLE = "CANISTER_UNAVAILABLE",
-  PRINCIPAL_INVALID = "PRINCIPAL_INVALID",
-  PERMISSION_DENIED = "PERMISSION_DENIED",
-  RATE_LIMITED = "RATE_LIMITED",
-  SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
-  UNKNOWN = "UNKNOWN"
-}
-
-interface ClassifiedError {
-  type: BalanceErrorType;
-  message: string;
-  isRetryable: boolean;
-  userMessage: string;
-}
-
-function classifyBalanceError(error: unknown): ClassifiedError {
-  const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  
-  // Network-related errors
-  if (errorMessage.includes('network') || 
-      errorMessage.includes('fetch') ||
-      errorMessage.includes('connection') ||
-      errorMessage.includes('connectivity')) {
-    return {
-      type: BalanceErrorType.NETWORK,
-      message: errorMessage,
-      isRetryable: true,
-      userMessage: "Network connection error. Please check your internet connection and try again."
-    };
-  }
-  
-  // Timeout errors
-  if (errorMessage.includes('timeout') || 
-      errorMessage.includes('timed out') ||
-      errorMessage.includes('deadline')) {
-    return {
-      type: BalanceErrorType.TIMEOUT,
-      message: errorMessage,
-      isRetryable: true,
-      userMessage: "Request timed out. The network may be slow. Please try again."
-    };
-  }
-  
-  // Authentication/authorization errors
-  if (errorMessage.includes('unauthorized') || 
-      errorMessage.includes('unauthenticated') ||
-      errorMessage.includes('authentication') ||
-      errorMessage.includes('auth')) {
-    return {
-      type: BalanceErrorType.AUTHENTICATION,
-      message: errorMessage,
-      isRetryable: false,
-      userMessage: "Authentication error. Please reconnect your wallet and try again."
-    };
-  }
-  
-  // Canister-specific errors
-  if (errorMessage.includes('canister') || 
-      errorMessage.includes('replica') ||
-      errorMessage.includes('ic0.app') ||
-      errorMessage.includes('dfinity')) {
-    return {
-      type: BalanceErrorType.CANISTER_UNAVAILABLE,
-      message: errorMessage,
-      isRetryable: true,
-      userMessage: "The Internet Computer network is temporarily unavailable. Please try again in a moment."
-    };
-  }
-  
-  // Principal validation errors
-  if (errorMessage.includes('principal') || 
-      errorMessage.includes('invalid') ||
-      errorMessage.includes('malformed')) {
-    return {
-      type: BalanceErrorType.PRINCIPAL_INVALID,
-      message: errorMessage,
-      isRetryable: false,
-      userMessage: "Invalid wallet address format. Please check your wallet connection."
-    };
-  }
-  
-  // Rate limiting
-  if (errorMessage.includes('rate') || 
-      errorMessage.includes('limit') ||
-      errorMessage.includes('throttle') ||
-      errorMessage.includes('too many')) {
-    return {
-      type: BalanceErrorType.RATE_LIMITED,
-      message: errorMessage,
-      isRetryable: true,
-      userMessage: "Too many requests. Please wait a moment before trying again."
-    };
-  }
-  
-  // Permission denied
-  if (errorMessage.includes('permission') || 
-      errorMessage.includes('forbidden') ||
-      errorMessage.includes('denied')) {
-    return {
-      type: BalanceErrorType.PERMISSION_DENIED,
-      message: errorMessage,
-      isRetryable: false,
-      userMessage: "Permission denied. You may not have access to this resource."
-    };
-  }
-  
-  // Service unavailable
-  if (errorMessage.includes('service') || 
-      errorMessage.includes('unavailable') ||
-      errorMessage.includes('maintenance') ||
-      errorMessage.includes('down')) {
-    return {
-      type: BalanceErrorType.SERVICE_UNAVAILABLE,
-      message: errorMessage,
-      isRetryable: true,
-      userMessage: "Service is temporarily unavailable. Please try again later."
-    };
-  }
-  
-  // Default case
-  return {
-    type: BalanceErrorType.UNKNOWN,
-    message: errorMessage,
-    isRetryable: true,
-    userMessage: "An unexpected error occurred while fetching balance. Please try again."
-  };
-}
-
-// Enhanced retry logic with exponential backoff and jitter
-async function withAdvancedRetry<T>(
+async function withRetry<T>(
   operation: () => Promise<T>,
-  options: {
-    maxRetries?: number;
-    baseDelay?: number;
-    maxDelay?: number;
-    jitter?: boolean;
-    shouldRetry?: (error: any, attempt: number) => boolean;
-  } = {}
+  maxRetries: number = 3,
+  baseDelay: number = 1000
 ): Promise<T> {
-  const {
-    maxRetries = 3,
-    baseDelay = 1000,
-    maxDelay = 30000,
-    jitter = true,
-    shouldRetry = (error, attempt) => {
-      const classified = classifyBalanceError(error);
-      return classified.isRetryable && attempt < maxRetries;
-    }
-  } = options;
-
   let lastError: Error;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -266,28 +38,11 @@ async function withAdvancedRetry<T>(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       
-      if (!shouldRetry(error, attempt)) {
-        throw lastError;
-      }
-
       if (attempt === maxRetries) {
         break;
       }
 
-      // Calculate delay with exponential backoff
-      let delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
-      
-      // Add jitter to prevent thundering herd
-      if (jitter) {
-        delay = delay + Math.random() * delay * 0.1;
-      }
-
-      console.warn(`Balance query attempt ${attempt} failed, retrying in ${Math.round(delay)}ms:`, {
-        error: lastError.message,
-        attempt,
-        maxRetries
-      });
-
+      const delay = baseDelay * Math.pow(2, attempt - 1);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -295,42 +50,10 @@ async function withAdvancedRetry<T>(
   throw lastError!;
 }
 
-// Safely serialize a delegation identity for backend usage.
-// Falls back to "anonymous" string if serialization is not available.
-function serializeDelegationIdentity(identity: any): any {
-  try {
-    if (identity && typeof identity.toJSON === "function") {
-      return identity.toJSON();
-    }
-    // Some identity implementations may not expose toJSON.
-    // We avoid breaking the app by falling back to a sentinel value.
-    console.warn("Delegation identity does not implement toJSON; using anonymous fallback");
-    return "anonymous";
-  } catch (e) {
-    console.warn("Failed to serialize delegation identity; using anonymous fallback", e);
-    return "anonymous";
-  }
-}
-
 export function useBackend() {
   const { isConnected, principal, delegationIdentity } = useWallet();
 
-  const getAuthenticatedBackend = useCallback(() => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      return backend;
-    }
-
-    // Return backend client with a no-op auth header to keep compatibility,
-    // avoiding calling identity.toJSON() here.
-    return backend.with({
-      auth: async () => {
-        // Intentionally return empty headers; backend endpoints use body fields, not auth.
-        return {};
-      },
-    });
-  }, [isConnected, principal, delegationIdentity]);
-
-  const createToken = useCallback(withErrorHandling(async (data: {
+  const createToken = useCallback(async (data: {
     tokenName: string;
     symbol: string;
     totalSupply: number;
@@ -343,18 +66,16 @@ export function useBackend() {
       throw new Error("Wallet not connected");
     }
 
-    const authenticatedBackend = getAuthenticatedBackend();
-    
     return await withRetry(async () => {
-      return await authenticatedBackend.token.create({
+      return await backend.token.create({
         ...data,
         creatorPrincipal: principal,
-        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
+        delegationIdentity: delegationIdentity,
       });
     });
-  }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, delegationIdentity]);
 
-  const mintTokens = useCallback(withErrorHandling(async (
+  const mintTokens = useCallback(async (
     tokenId: number, 
     amount: number, 
     toPrincipal: string
@@ -363,20 +84,18 @@ export function useBackend() {
       throw new Error("Wallet not connected");
     }
 
-    const authenticatedBackend = getAuthenticatedBackend();
-    
     return await withRetry(async () => {
-      return await authenticatedBackend.token.mint({
+      return await backend.token.mint({
         tokenId,
         amount,
         toPrincipal,
         creatorPrincipal: principal,
-        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
+        delegationIdentity: delegationIdentity,
       });
     });
-  }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, delegationIdentity]);
 
-  const burnTokens = useCallback(withErrorHandling(async (
+  const burnTokens = useCallback(async (
     tokenId: number, 
     amount: number, 
     fromPrincipal: string
@@ -385,20 +104,18 @@ export function useBackend() {
       throw new Error("Wallet not connected");
     }
 
-    const authenticatedBackend = getAuthenticatedBackend();
-    
     return await withRetry(async () => {
-      return await authenticatedBackend.token.burn({
+      return await backend.token.burn({
         tokenId,
         amount,
         fromPrincipal,
         creatorPrincipal: principal,
-        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
+        delegationIdentity: delegationIdentity,
       });
     });
-  }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, delegationIdentity]);
 
-  const transferTokens = useCallback(withErrorHandling(async (
+  const transferTokens = useCallback(async (
     tokenId: number, 
     amount: number, 
     fromPrincipal: string, 
@@ -408,20 +125,18 @@ export function useBackend() {
       throw new Error("Wallet not connected");
     }
 
-    const authenticatedBackend = getAuthenticatedBackend();
-    
     return await withRetry(async () => {
-      return await authenticatedBackend.token.transfer({
+      return await backend.token.transfer({
         tokenId,
         amount,
         fromPrincipal,
         toPrincipal,
-        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
+        delegationIdentity: delegationIdentity,
       });
     });
-  }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, delegationIdentity]);
 
-  const transferICP = useCallback(withErrorHandling(async (
+  const transferICP = useCallback(async (
     amountICP: string | number,
     toPrincipal: string
   ) => {
@@ -433,7 +148,6 @@ export function useBackend() {
       throw new Error("Recipient principal is required");
     }
 
-    // Validate recipient principal format
     if (!isValidPrincipal(toPrincipal)) {
       throw new Error("Invalid recipient principal format");
     }
@@ -443,124 +157,82 @@ export function useBackend() {
       throw new Error("Amount must be greater than 0");
     }
 
-    const authenticatedBackend = getAuthenticatedBackend();
-
     return await withRetry(async () => {
-      // Use the configured ICP Ledger Canister ID from the backend
-      // The backend will use the secret ICPLedgerCanisterId you configured
-      return await authenticatedBackend.icp.performTokenOperation({
-        canisterId: "dummy", // This will be replaced by the backend with the actual ledger canister ID
+      return await backend.icp.performTokenOperation({
+        canisterId: "dummy",
         operation: "transfer",
         amount: amountE8s.toString(),
         recipient: toPrincipal,
-        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
+        delegationIdentity: delegationIdentity,
         ownerPrincipal: principal,
       });
     });
-  }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, delegationIdentity]);
 
-  const getTokenBalance = useCallback(withErrorHandling(async (
+  const getTokenBalance = useCallback(async (
     tokenId: number, 
     principal: string
   ) => {
-    const authenticatedBackend = getAuthenticatedBackend();
     return await withRetry(async () => {
-      return await authenticatedBackend.token.getBalance({ tokenId, principal });
+      return await backend.token.getBalance({ tokenId, principal });
     });
-  }), [getAuthenticatedBackend]);
+  }, []);
 
   const getICPBalance = useCallback(async (
     targetPrincipal: string
   ) => {
-    // Enhanced principal validation with detailed error messages
-    const validation = validatePrincipal(targetPrincipal);
-    if (!validation.isValid) {
-      console.warn("Invalid principal format for ICP balance query:", {
-        principal: targetPrincipal,
-        error: validation.error,
-        message: validation.message
-      });
-      
+    if (!isValidPrincipal(targetPrincipal)) {
       return {
         balance: "0",
-        error: validation.message || "Invalid principal format"
+        error: "Invalid principal format"
       };
     }
 
     try {
-      const backendClient = getAuthenticatedBackend();
-      
-      // Enhanced retry with smart error handling
-      const result = await withAdvancedRetry(async () => {
-        return await backendClient.icp.getBalance({ 
-          canisterId: "dummy", // This will be replaced by the backend with the actual ledger canister ID
+      const result = await withRetry(async () => {
+        return await backend.icp.getBalance({ 
+          canisterId: "dummy",
           principal: targetPrincipal
         });
-      }, {
-        maxRetries: 4, // Increased retries for balance queries
-        baseDelay: 800, // Slightly shorter initial delay
-        maxDelay: 20000, // Reasonable max delay
-        jitter: true,
-        shouldRetry: (error, attempt) => {
-          const classified = classifyBalanceError(error);
-          
-          // Don't retry principal validation errors
-          if (classified.type === BalanceErrorType.PRINCIPAL_INVALID ||
-              classified.type === BalanceErrorType.AUTHENTICATION ||
-              classified.type === BalanceErrorType.PERMISSION_DENIED) {
-            return false;
-          }
-          
-          // Retry network, timeout, and service errors
-          return classified.isRetryable && attempt < 4;
-        }
-      });
+      }, 2, 1000);
       
-      // Validate the response format
-      if (!result || typeof (result as any).balance === 'undefined') {
-        console.warn("Invalid ICP balance response format:", result);
+      if (!result || typeof result.balance === 'undefined') {
         return {
           balance: "0",
-          error: "Invalid response format from balance service"
+          error: "Invalid response format"
         };
       }
 
-      // Propagate backend-provided error if any
-      const backendError = (result as any).error as string | undefined;
-
       return {
-        balance: (result as any).balance.toString(),
-        error: backendError
+        balance: result.balance.toString(),
+        error: result.error
       };
       
     } catch (error) {
-      const classified = classifyBalanceError(error);
+      console.error("Failed to fetch ICP balance:", error);
       
-      console.error("Failed to fetch ICP balance after retries:", {
-        principal: targetPrincipal,
-        error: error instanceof Error ? error.message : String(error),
-        errorType: classified.type,
-        isRetryable: classified.isRetryable,
-        stack: error instanceof Error ? error.stack : undefined
-      });
-
-      // Return safe default response with user-friendly error message
-      return {
-        balance: "0",
-        error: classified.userMessage
-      };
+      const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      
+      if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+        return { balance: "0", error: "Network connection error" };
+      } else if (errorMessage.includes('timeout')) {
+        return { balance: "0", error: "Request timed out" };
+      } else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
+        return { balance: "0", error: "Authentication error" };
+      } else {
+        return { balance: "0", error: "Unable to fetch balance" };
+      }
     }
-  }, [getAuthenticatedBackend]);
+  }, []);
 
-  const syncTokenWithCanister = useCallback(withErrorHandling(async (tokenId: number) => {
-    const authenticatedBackend = getAuthenticatedBackend();
+  const syncTokenWithCanister = useCallback(async (tokenId: number) => {
     return await withRetry(async () => {
-      return await authenticatedBackend.token.syncWithCanister({ tokenId });
+      return await backend.token.syncWithCanister({ tokenId });
     });
-  }), [getAuthenticatedBackend]);
+  }, []);
 
   return {
-    backend: getAuthenticatedBackend(),
+    backend,
     createToken,
     mintTokens,
     burnTokens,

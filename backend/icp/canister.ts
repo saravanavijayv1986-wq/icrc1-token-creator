@@ -24,42 +24,26 @@ import {
   type SignIdentity,
 } from "@dfinity/identity";
 
-// ICP configuration secrets
 const icpHost = secret("ICPHost");
 const deployCyclesAmount = secret("DeployCyclesAmount");
-
-// New config: fee, treasury wallets, ledger canister, and treasury delegation for cycles wallet auth
-const userCreationFeeICP = secret("UserCreationFeeICP"); // e.g. "1"
-const treasuryICPWalletPrincipal = secret("TreasuryICPWallet"); // principal text of the treasury ICP wallet receiver
-const treasuryCyclesWalletId = secret("TreasuryCyclesWallet"); // cycles wallet canister id (principal text)
-const treasuryDelegationIdentityJSON = secret("TreasuryDelegationIdentityJSON"); // JSON string OR raw secret key to authenticate as treasury wallet controller
-const icpLedgerCanisterId = secret("ICPLedgerCanisterId"); // The ICP ledger canister ID (override)
-const wasmModuleUrl = secret("ICRCWasmModuleUrl"); // URL to the ICRC-1 WASM module
-const wasmModuleSha256 = secret("ICRCWasmSHA256"); // Optional checksum to verify integrity (hex)
-
-// Optional: allow bypassing user ICP fee transfer (development only).
-// Set SkipUserFeeDuringDev to "true" in Secrets to bypass fee transfer when delegation parsing fails.
+const userCreationFeeICP = secret("UserCreationFeeICP");
+const treasuryICPWalletPrincipal = secret("TreasuryICPWallet");
+const treasuryCyclesWalletId = secret("TreasuryCyclesWallet");
+const treasuryDelegationIdentityJSON = secret("TreasuryDelegationIdentityJSON");
+const icpLedgerCanisterId = secret("ICPLedgerCanisterId");
+const wasmModuleUrl = secret("ICRCWasmModuleUrl");
+const wasmModuleSha256 = secret("ICRCWasmSHA256");
 const skipUserFeeDuringDev = secret("SkipUserFeeDuringDev");
 
-// Validate default ICP Ledger Canister ID at boot
 const DEFAULT_ICP_LEDGER_CANISTER_ID = "ryjl3-tyaaa-aaaaa-aaaba-cai";
-try {
-  Principal.fromText(DEFAULT_ICP_LEDGER_CANISTER_ID);
-  log.info("Default ICP Ledger Canister ID validated");
-} catch (e) {
-  log.error("Default ICP Ledger Canister ID invalid, this should never happen", { error: e instanceof Error ? e.message : String(e) });
-}
 
-// Helper function to get the ICP Ledger Canister ID with proper validation
 function getICPLedgerCanisterId(): string {
   const configuredId = icpLedgerCanisterId();
 
-  // If no canister ID is configured, use the official ICP Ledger Canister ID
   if (!configuredId) {
     return DEFAULT_ICP_LEDGER_CANISTER_ID;
   }
 
-  // Validate the configured canister ID format
   try {
     Principal.fromText(configuredId);
     return configuredId;
@@ -71,7 +55,6 @@ function getICPLedgerCanisterId(): string {
   }
 }
 
-// Resolve target canister ID, supporting "dummy" as a placeholder for the ICP ledger canister.
 function resolveCanisterPrincipal(canisterId: string): { principal: Principal; isLedger: boolean } {
   try {
     if (!canisterId || canisterId === "dummy") {
@@ -82,72 +65,27 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
     const isLedger = p.toText() === getICPLedgerCanisterId();
     return { principal: p, isLedger };
   } catch {
-    // Fallback to ledger if invalid
     const ledgerId = getICPLedgerCanisterId();
     return { principal: Principal.fromText(ledgerId), isLedger: true };
   }
 }
 
-// Enhanced delegation validation and reconstruction
-function validateDelegationChain(delegationChain: any): boolean {
-  if (!delegationChain || typeof delegationChain !== 'object') {
-    return false;
-  }
-
-  // Check required fields for delegation chain
-  if (!Array.isArray(delegationChain.delegations) || !delegationChain.publicKey) {
-    return false;
-  }
-
-  // Validate each delegation in the chain
-  for (const delegation of delegationChain.delegations) {
-    if (!delegation.delegation || !delegation.signature) {
-      return false;
-    }
-
-    // Validate delegation structure
-    const del = delegation.delegation;
-    if (!del.pubkey || !del.expiration || !del.targets) {
-      return false;
-    }
-
-    // Check expiration (delegation should not be expired)
-    const expirationNs = typeof del.expiration === 'bigint' ? del.expiration : BigInt(del.expiration);
-    const nowNs = BigInt(Date.now()) * BigInt(1_000_000); // Convert to nanoseconds
-    if (expirationNs <= nowNs) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-// Try to reconstruct a SignIdentity from provided data with enhanced validation.
-// Supports the following formats:
-// - A JSON string or object produced by Ed25519KeyIdentity.toJSON()
-// - An object: { secretKey: "<hex-or-base64>" } or { privateKey: "<hex-or-base64>" }
-// - A raw string containing a hex or base64 Ed25519 secret key (32 or 64 bytes)
-// - A JSON object produced by DelegationIdentity.toJSON() WITH proper validation
-// - The literal string "anonymous" for testing only.
 export function toSignIdentity(identityData: unknown): SignIdentity {
   try {
-    // 1) Strings: try JSON, then secret key formats, then "anonymous"
     if (typeof identityData === "string") {
       const s = identityData.trim();
 
-      // Try to parse as JSON first
       try {
         const parsed = JSON.parse(s);
         return toSignIdentity(parsed);
       } catch {
-        // Not JSON — continue
+        // Not JSON
       }
 
       if (s.toLowerCase() === "anonymous") {
         return new AnonymousIdentity();
       }
 
-      // Try hex/base64 secret key
       const cleaned = s.replace(/^0x/, "");
       const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
       const isB64 = /^[A-Za-z0-9+/=]+$/.test(s) && s.length % 4 === 0;
@@ -158,22 +96,17 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
         }
       }
 
-      throw new AppError(
-        ErrorCode.INVALID_DELEGATION,
-        "Unsupported identity string format"
-      );
+      throw new AppError(ErrorCode.INVALID_DELEGATION, "Unsupported identity string format");
     }
 
     const data: any = identityData;
 
-    // 2) Plain Ed25519 identity JSON
     try {
       return Ed25519KeyIdentity.fromJSON(data);
     } catch {
       // fallthrough
     }
 
-    // 3) Object with explicit secret key
     const keyStr: string | undefined = data?.secretKey ?? data?.privateKey ?? data?.sk;
     if (keyStr && typeof keyStr === "string") {
       const cleaned = keyStr.replace(/^0x/, "");
@@ -182,29 +115,14 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
       return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
     }
 
-    // 4) Enhanced DelegationIdentity JSON validation and reconstruction
     if (data && (data.delegations || data.delegation || data.publicKey)) {
-      // Validate the delegation chain structure first
       let chainObj: any = null;
       if (data.delegations && data.publicKey) {
         chainObj = { delegations: data.delegations, publicKey: data.publicKey };
       } else if (data.delegation && data.publicKey) {
-        // Some formats may use "delegation" as the field name
         chainObj = { delegations: data.delegation, publicKey: data.publicKey };
       } else {
-        // As a last resort, try entire object
         chainObj = data;
-      }
-
-      // Validate delegation chain before reconstruction
-      if (!validateDelegationChain(chainObj)) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Invalid or expired delegation chain",
-          {
-            hint: "The delegation chain is malformed or has expired. Please reconnect your wallet.",
-          }
-        );
       }
 
       let chain: DelegationChain;
@@ -214,22 +132,16 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
         throw new AppError(
           ErrorCode.INVALID_DELEGATION,
           "Failed to reconstruct delegation chain",
-          {
-            reason: error instanceof Error ? error.message : String(error),
-            hint: "The delegation data format is incompatible. Please reconnect your wallet.",
-          }
+          { reason: error instanceof Error ? error.message : String(error) }
         );
       }
 
-      // Reconstruct inner identity with enhanced validation
       let inner: SignIdentity | null = null;
 
       if (data.identity) {
-        // Nested identity JSON (preferred)
         try {
           inner = Ed25519KeyIdentity.fromJSON(data.identity);
         } catch {
-          // try raw key on nested identity
           const nestedKey = data.identity.secretKey ?? data.identity.privateKey;
           if (nestedKey && typeof nestedKey === 'string') {
             try {
@@ -246,7 +158,6 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
         }
       }
 
-      // Fallback to root-level key fields
       if (!inner && (data.secretKey || data.privateKey || data.sk)) {
         try {
           const k = String(data.secretKey ?? data.privateKey ?? data.sk);
@@ -264,67 +175,13 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
       if (!inner) {
         throw new AppError(
           ErrorCode.INVALID_DELEGATION,
-          "Delegation chain provided without valid inner identity",
-          {
-            hint: "Include an 'identity' with Ed25519KeyIdentity JSON or a 'secretKey' field to reconstruct the signer.",
-          }
+          "Delegation chain provided without valid inner identity"
         );
       }
 
-      // Validate that the inner identity can properly sign
-      try {
-        const testMessage = new Uint8Array([1, 2, 3, 4]);
-        const signature = inner.sign(testMessage);
-        if (!signature || signature.length === 0) {
-          throw new Error("Identity cannot produce valid signatures");
-        }
-      } catch (signError) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Inner identity lacks proper signing capabilities",
-          {
-            reason: signError instanceof Error ? signError.message : String(signError),
-            hint: "The identity cannot sign messages. Please reconnect your wallet.",
-          }
-        );
-      }
-
-      // Create and validate DelegationIdentity
-      let delegationIdentity: DelegationIdentity;
-      try {
-        delegationIdentity = DelegationIdentity.fromDelegation(inner, chain);
-      } catch (error) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Failed to create delegation identity",
-          {
-            reason: error instanceof Error ? error.message : String(error),
-            hint: "The delegation chain and inner identity are incompatible.",
-          }
-        );
-      }
-
-      // Final validation: ensure the delegation identity can get principal
-      try {
-        const principal = delegationIdentity.getPrincipal();
-        if (!principal || principal.toText().length === 0) {
-          throw new Error("Invalid principal");
-        }
-      } catch (principalError) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Delegation identity has invalid principal",
-          {
-            reason: principalError instanceof Error ? principalError.message : String(principalError),
-            hint: "The delegation identity cannot provide a valid principal.",
-          }
-        );
-      }
-
-      return delegationIdentity;
+      return DelegationIdentity.fromDelegation(inner, chain);
     }
 
-    // 5) Explicit request for anonymous identity
     if (data === null) {
       return new AnonymousIdentity();
     }
@@ -346,7 +203,6 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
   }
 }
 
-// Retry helper with exponential backoff
 async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 500): Promise<T> {
   let error: any;
   for (let attempt = 0; attempt < retries; attempt++) {
@@ -361,7 +217,6 @@ async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 5
   throw error;
 }
 
-// Create authenticated agent with proper error handling and retries
 export async function createAuthenticatedAgent(identityInput: any, retries = 3): Promise<HttpAgent> {
   return await withBackoff(async () => {
     let identity: SignIdentity;
@@ -369,7 +224,6 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
     try {
       identity = toSignIdentity(identityInput);
     } catch (error) {
-      // Enhance error message for delegation issues
       if (error instanceof AppError && error.code === ErrorCode.INVALID_DELEGATION) {
         log.error("Failed to reconstruct delegation identity", {
           error: error.message,
@@ -406,10 +260,9 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
       );
     }
 
-    // Configure agent with production settings
     agent.addTransform("update", ({ body }) => ({
       ...body,
-      ingress_expiry: BigInt(Date.now() + 5 * 60 * 1000) * BigInt(1_000_000), // 5 minutes
+      ingress_expiry: BigInt(Date.now() + 5 * 60 * 1000) * BigInt(1_000_000),
     }));
 
     if (host.includes("localhost") || host.includes("127.0.0.1")) {
@@ -426,7 +279,6 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
       }
     }
 
-    // Test the agent by getting the principal
     try {
       const principal = identity.getPrincipal();
       log.info("Authenticated agent created successfully", {
@@ -448,7 +300,6 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
   }, retries, 500);
 }
 
-// Helper to create a query agent with host fallback for robust production usage.
 export async function createQueryAgentWithFallback(): Promise<HttpAgent> {
   const hosts = [
     icpHost() || "https://ic0.app",
@@ -474,17 +325,14 @@ export async function createQueryAgentWithFallback(): Promise<HttpAgent> {
   throw lastErr instanceof Error ? lastErr : new Error("Failed to create query agent");
 }
 
-// Get ICRC-1 token WASM module using Object Storage for persistence and auditability
 async function getTokenWasm(): Promise<Uint8Array> {
   const objName = "wasm/icrc1_ledger.wasm";
   const expectedSha = (wasmModuleSha256() || "").trim().toLowerCase().replace(/^0x/, "");
   try {
-    // If present in object storage, download and return
     const exists = await icpStorage.exists(objName);
     if (exists) {
       const buf = await icpStorage.download(objName);
       if (expectedSha && !matchesSha256(buf, expectedSha)) {
-        // Ignore cached if checksum mismatch
         log.warn("Cached WASM checksum mismatch, refetching", { objName });
       } else {
         log.info("Loaded WASM module from object storage", { name: objName, size: buf.length });
@@ -498,7 +346,6 @@ async function getTokenWasm(): Promise<Uint8Array> {
 
     log.info("Fetching WASM module", { url });
 
-    // Retry download with backoff and timeout
     const wasmArrayBuffer = await withBackoff(async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 30000);
@@ -521,17 +368,14 @@ async function getTokenWasm(): Promise<Uint8Array> {
 
     const wasmModule = new Uint8Array(wasmArrayBuffer);
 
-    // Validate WASM module size bounds
     if (wasmModule.length < 1000 || wasmModule.length > 50 * 1024 * 1024) {
       throw new Error(`Invalid WASM module size: ${wasmModule.length} bytes`);
     }
 
-    // Verify checksum if provided
     if (expectedSha && !matchesSha256(Buffer.from(wasmModule), expectedSha)) {
       throw new Error("WASM checksum mismatch");
     }
 
-    // Upload to object storage for future use
     await icpStorage
       .upload(objName, Buffer.from(wasmModule), {
         contentType: "application/wasm",
@@ -554,9 +398,7 @@ function matchesSha256(buf: Buffer, expectedHex: string): boolean {
   return actual === expectedHex;
 }
 
-// Helpers for fee handling and treasury identity
 function icpToE8s(amountStr: string): bigint {
-  // Convert decimal ICP string to e8s bigint
   const normalized = amountStr.trim();
   if (!/^\d+(\.\d+)?$/.test(normalized)) {
     throw new AppError(ErrorCode.VALIDATION_ERROR, `Invalid ICP fee amount: ${amountStr}`);
@@ -572,7 +414,6 @@ export function parseTreasuryDelegationIdentity(): SignIdentity {
     throw new AppError(ErrorCode.UNAUTHORIZED_ACCESS, "Treasury delegation identity not configured");
   }
   try {
-    // Accept both JSON and raw secret key strings
     return toSignIdentity(raw);
   } catch (e) {
     throw new AppError(
@@ -627,7 +468,7 @@ async function createAndInstallWithCyclesWallet(
   wasmModule: Uint8Array,
   initArgs: Uint8Array
 ): Promise<{ canisterId: Principal; cyclesUsed: bigint }> {
-  const cyclesStr = deployCyclesAmount() || "3000000000000"; // default 3T cycles
+  const cyclesStr = deployCyclesAmount() || "3000000000000";
   const cycles = BigInt(cyclesStr);
 
   const walletId = treasuryCyclesWalletId();
@@ -692,16 +533,10 @@ export interface DeployCanisterResponse {
   feePaidICP: string;
 }
 
-// Deploys an ICRC-1 token canister to the Internet Computer.
-// Flow:
-// 1) Collect user fee in ICP to treasury ICP wallet.
-// 2) Create canister via Treasury Cycles Wallet.
-// 3) Install token code and initialize owned by user principal.
 export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
   { expose: true, method: "POST", path: "/icp/deploy" },
   monitor("icp.deploy", async (req) => {
     try {
-      // Comprehensive input validation
       const validator = validate()
         .required(req.tokenName, "tokenName")
         .string(req.tokenName, "tokenName", { minLength: 2, maxLength: 50 })
@@ -726,7 +561,6 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         throw new AppError(ErrorCode.INVALID_DELEGATION, "Valid delegation identity is required");
       }
 
-      // Step 1: Collect user creation fee (ICP) using user's delegation
       let feeResult: { feePaidE8s: bigint } | null = null;
       try {
         const userAgent = await createAuthenticatedAgent(req.delegationIdentity);
@@ -739,7 +573,6 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
           });
           metrics.increment("canister.deploy_fee_bypassed");
         } else {
-          // Re-throw with enhanced error context
           if (feeErr instanceof AppError && feeErr.code === ErrorCode.INVALID_DELEGATION) {
             throw new AppError(
               ErrorCode.INVALID_DELEGATION,
@@ -754,10 +587,8 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         }
       }
 
-      // Get ICRC-1 WASM module (persisted in object storage)
       const wasmModule = await getTokenWasm();
 
-      // Encode initialization arguments via candid
       const initArgs = encodeIcrc1InitArgs({
         name: req.tokenName,
         symbol: req.symbol,
@@ -768,7 +599,6 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         isBurnable: req.isBurnable,
       });
 
-      // Step 2-3: Create & install via Treasury Cycles Wallet, else fallback to management canister if not configured
       let canisterId: Principal;
       let cyclesUsed: bigint;
 
@@ -782,7 +612,6 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         canisterId = result.canisterId;
         cyclesUsed = result.cyclesUsed;
       } else {
-        // Fallback path (no cycles attached) — not recommended for production
         const userAgent = await createAuthenticatedAgent(req.delegationIdentity);
         const management = Actor.createActor(managementIdlFactory, {
           agent: userAgent,
@@ -808,7 +637,6 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         cyclesUsed = BigInt(deployCyclesAmount() || "0");
       }
 
-      // Verify canister is running
       try {
         const agent = await createQueryAgentWithFallback();
         const management = Actor.createActor(managementIdlFactory, {
@@ -827,10 +655,8 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         });
       }
 
-      // Generate deployment hash for tracking
       const deploymentHash = `deploy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // Record metrics
       metrics.increment("canister.deployed");
 
       const cyclesStr = cyclesUsed.toString();
@@ -860,12 +686,10 @@ export interface CanisterStatus {
   controllers: string[];
 }
 
-// Retrieves the current status of a deployed canister.
 export const getStatus = api<{ canisterId: string }, CanisterStatus>(
   { expose: true, method: "GET", path: "/icp/canister/:canisterId/status" },
   monitor("icp.getStatus", async (req) => {
     try {
-      // Validate canister ID format
       validate()
         .required(req.canisterId, "canisterId")
         .custom(req.canisterId, {
@@ -881,7 +705,6 @@ export const getStatus = api<{ canisterId: string }, CanisterStatus>(
         })
         .throwIfInvalid();
 
-      // Create agent (unauthenticated for status queries) with host fallback
       const agent = await createQueryAgentWithFallback();
 
       const management = Actor.createActor(managementIdlFactory, {
@@ -931,12 +754,10 @@ export interface TokenOperationResponse {
   blockIndex?: string;
 }
 
-// Performs token operations using the owner's delegation.
 export const performTokenOperation = api<TokenOperationRequest, TokenOperationResponse>(
   { expose: true, method: "POST", path: "/icp/operation" },
   monitor("icp.tokenOperation", async (req) => {
     try {
-      // Comprehensive validation
       const validator = validate()
         .required(req.canisterId, "canisterId")
         .required(req.operation, "operation")
@@ -973,10 +794,8 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         throw new AppError(ErrorCode.INVALID_DELEGATION, "Valid delegation identity is required");
       }
 
-      // Resolve target canister (supporting ICP ledger via "dummy" or explicit ID)
       const { principal: targetCanister, isLedger } = resolveCanisterPrincipal(req.canisterId);
 
-      // Only transfer is supported on the ICP ledger
       if (isLedger && req.operation !== "transfer") {
         throw new AppError(
           ErrorCode.VALIDATION_ERROR,
@@ -984,16 +803,13 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         );
       }
 
-      // Create authenticated agent with enhanced error handling
       const agent = await createAuthenticatedAgent(req.delegationIdentity);
 
-      // Create appropriate actor using proper IDL factories
       const tokenActor = Actor.createActor(isLedger ? icrc1LedgerIdlFactory : icrc1IdlFactory, {
         agent,
         canisterId: targetCanister,
       }) as ActorSubclass<any>;
 
-      // Validate methods are available on the WASM (runtime safety)
       if (!isLedger) {
         const required = new Set(["icrc1_transfer", "icrc1_balance_of"]);
         if (req.operation === "mint") required.add("mint");
@@ -1057,7 +873,6 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
           throw new AppError(ErrorCode.VALIDATION_ERROR, `Unknown operation: ${req.operation}`);
       }
 
-      // Handle result based on ICRC-1 response format
       let transactionId: string;
       let success: boolean;
 
@@ -1073,7 +888,6 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         transactionId = String(result ?? "");
       }
 
-      // Get updated balance
       let newBalance: string | undefined;
       try {
         const balance = await (tokenActor as any).icrc1_balance_of(ownerAccount);
@@ -1111,12 +925,10 @@ export interface TokenInfo {
   metadata: MetadataEntry[];
 }
 
-// Retrieves token information from the canister.
 export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
   { expose: true, method: "GET", path: "/icp/token/:canisterId/info" },
   monitor("icp.getTokenInfo", async (req) => {
     try {
-      // Validate canister ID
       validate()
         .required(req.canisterId, "canisterId")
         .custom(req.canisterId, {
@@ -1132,7 +944,6 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
         })
         .throwIfInvalid();
 
-      // Create agent (unauthenticated for queries) with host fallback
       const agent = await createQueryAgentWithFallback();
 
       const tokenActor = Actor.createActor(icrc1IdlFactory, {
@@ -1140,7 +951,6 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
         canisterId: Principal.fromText(req.canisterId),
       }) as ActorSubclass<any>;
 
-      // Fetch token information with timeout and retry
       const fetchPromise = async () => {
         return Promise.all([
           tokenActor.icrc1_name(),
@@ -1172,11 +982,9 @@ export const getTokenInfo = api<{ canisterId: string }, TokenInfo>(
         500
       )) as any[];
 
-      // Extract transfer fee from metadata
       const transferFeeEntry = metadata.find(([key]: [string, any]) => key === "icrc1:fee");
       const transferFee = transferFeeEntry ? transferFeeEntry[1].Nat?.toString?.() || "0" : "0";
 
-      // Convert metadata tuples to MetadataEntry objects
       const metadataEntries: MetadataEntry[] = metadata.map(([key, value]: [string, any]) => ({
         key,
         value,
@@ -1207,15 +1015,12 @@ export interface BalanceResponse {
   error?: string;
 }
 
-// Gets the balance of a specific account.
 export const getBalance = api<BalanceRequest, BalanceResponse>(
   { expose: true, method: "GET", path: "/icp/token/:canisterId/balance/:principal" },
   monitor("icp.getBalance", async (req) => {
     try {
-      // Validate inputs
       const validator = validate().required(req.canisterId, "canisterId").required(req.principal, "principal");
 
-      // Validate principal format
       validator.custom(req.principal, {
         validate: (p) => {
           try {
@@ -1237,10 +1042,8 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
 
       validator.throwIfInvalid();
 
-      // Resolve canister ID (supporting "dummy" for ICP ledger)
       const { principal: targetCanister } = resolveCanisterPrincipal(req.canisterId);
 
-      // Create agent with robust host fallback
       const agent = await createQueryAgentWithFallback();
 
       const tokenActor = Actor.createActor(icrc1LedgerIdlFactory, {
@@ -1265,7 +1068,6 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
         error: error instanceof Error ? error.message : "Unknown",
       });
 
-      // Return default balance and include a user-friendly error reason so the UI can display and retry.
       let errorMessage = "Unknown error";
       if (error instanceof Error) {
         const msg = error.message.toLowerCase();

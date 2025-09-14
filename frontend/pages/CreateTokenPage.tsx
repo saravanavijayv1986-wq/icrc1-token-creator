@@ -9,7 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/use-toast";
 import { Loader2, Upload, Coins, Shield, Info, AlertTriangle, CheckCircle, Wallet, DollarSign } from "lucide-react";
 import { useBackend } from "../hooks/useBackend";
-import { tokenConfig, securityConfig } from "../config";
+import { tokenConfig } from "../config";
 import { validateTokenCreation } from "../utils/validation";
 import { withErrorHandling } from "../utils/errorHandling";
 
@@ -31,33 +31,15 @@ export default function CreateTokenPage() {
   const { toast } = useToast();
   const { createToken, getICPBalance, isConnected, principal } = useBackend();
 
-  // Fetch ICP balance when connected - with improved error handling
-  const { data: icpBalance, isLoading: balanceLoading, error: balanceError, refetch: refetchBalance } = useQuery({
+  const { data: icpBalance, isLoading: balanceLoading, refetch: refetchBalance } = useQuery({
     queryKey: ["icp-balance", principal],
     queryFn: async () => {
       if (!principal) return null;
-      try {
-        const result = await getICPBalance(principal);
-        return result;
-      } catch (error) {
-        console.error("ICP balance fetch failed:", error);
-        // Return null instead of throwing to prevent query from failing
-        return null;
-      }
+      return await getICPBalance(principal);
     },
     enabled: !!principal && isConnected,
-    refetchInterval: 30000, // Refresh every 30 seconds
-    retry: (failureCount, error) => {
-      // Only retry on network errors, not on validation errors
-      if (error && typeof error === 'object' && 'message' in error) {
-        const errorMessage = (error as Error).message.toLowerCase();
-        if (errorMessage.includes('invalid principal') || errorMessage.includes('validation')) {
-          return false; // Don't retry validation errors
-        }
-      }
-      return failureCount < 2; // Retry up to 2 times for other errors
-    },
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000), // Exponential backoff with max 5s
+    refetchInterval: 30000,
+    retry: false,
   });
 
   const createTokenMutation = useMutation({
@@ -71,14 +53,12 @@ export default function CreateTokenPage() {
     },
     onError: (error) => {
       console.error("Token creation failed:", error);
-      // Error is already handled by withErrorHandling
     },
   });
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
     
-    // Clear validation errors when user starts typing
     if (validationErrors.length > 0) {
       setValidationErrors([]);
     }
@@ -89,7 +69,6 @@ export default function CreateTokenPage() {
     if (!file) return;
 
     try {
-      // Validate file type
       if (!tokenConfig.validation.allowedImageTypes.includes(file.type)) {
         toast({
           title: "Invalid File Type",
@@ -99,7 +78,6 @@ export default function CreateTokenPage() {
         return;
       }
 
-      // Validate file size
       if (file.size > tokenConfig.validation.maxLogoSize) {
         toast({
           title: "File Too Large",
@@ -113,7 +91,6 @@ export default function CreateTokenPage() {
       reader.onload = (e) => {
         const result = e.target?.result as string;
         setLogoPreview(result);
-        // Extract base64 data (remove data:image/...;base64, prefix)
         const base64Data = result.split(',')[1];
         setFormData(prev => ({ ...prev, logoFile: base64Data }));
       };
@@ -131,7 +108,6 @@ export default function CreateTokenPage() {
     setIsValidating(true);
     
     try {
-      // Client-side validation
       const validation = validateTokenCreation({
         tokenName: formData.tokenName,
         symbol: formData.symbol,
@@ -144,17 +120,14 @@ export default function CreateTokenPage() {
         return false;
       }
 
-      // Additional business logic validation
       const totalSupply = parseInt(formData.totalSupply);
       const decimals = parseInt(formData.decimals);
 
-      // Check for reasonable supply amounts
       if (totalSupply > Math.pow(10, 15)) {
         setValidationErrors(["Total supply is unreasonably large"]);
         return false;
       }
 
-      // Warn about high decimal places for small supplies
       if (decimals > 8 && totalSupply < Math.pow(10, decimals)) {
         setValidationErrors(["High decimal places with low supply may cause precision issues"]);
         return false;
@@ -182,9 +155,8 @@ export default function CreateTokenPage() {
       return;
     }
 
-    // Check if user has sufficient ICP balance
     if (icpBalance && icpBalance.balance && !icpBalance.error) {
-      const balanceICP = parseInt(icpBalance.balance) / 100000000; // Convert from e8s to ICP
+      const balanceICP = parseInt(icpBalance.balance) / 100000000;
       const requiredICP = parseFloat(tokenConfig.fees.creationFeeICP);
       
       if (balanceICP < requiredICP) {
@@ -197,7 +169,6 @@ export default function CreateTokenPage() {
       }
     }
 
-    // Validate form
     const isValid = await validateForm();
     if (!isValid) {
       toast({
@@ -222,40 +193,24 @@ export default function CreateTokenPage() {
     });
   };
 
-  // Format ICP balance display
   const formatICPBalance = (balance: string) => {
-    const balanceICP = parseInt(balance) / 100000000; // Convert from e8s to ICP
+    const balanceICP = parseInt(balance) / 100000000;
     return balanceICP.toFixed(8);
   };
 
-  // Check if user has sufficient balance
   const hasSufficientBalance = icpBalance && icpBalance.balance && !icpBalance.error ? 
     (parseInt(icpBalance.balance) / 100000000) >= parseFloat(tokenConfig.fees.creationFeeICP) : 
     false;
 
-  // Determine balance display state
   const getBalanceDisplay = () => {
     if (balanceLoading) {
       return <Loader2 className="h-6 w-6 animate-spin inline" />;
     }
     
-    if (balanceError) {
-      return (
-        <div className="flex items-center space-x-2">
-          <span className="text-red-600 text-sm">Connection error</span>
-          <Button variant="ghost" size="sm" onClick={() => refetchBalance()}>
-            Retry
-          </Button>
-        </div>
-      );
-    }
-    
     if (icpBalance?.error) {
       return (
         <div className="flex items-center space-x-2">
-          <span className="text-red-600 text-sm">
-            {icpBalance.error === "Invalid principal format" ? "Wallet error" : "Failed to load"}
-          </span>
+          <span className="text-red-600 text-sm">{icpBalance.error}</span>
           <Button variant="ghost" size="sm" onClick={() => refetchBalance()}>
             Retry
           </Button>
@@ -279,7 +234,6 @@ export default function CreateTokenPage() {
         </p>
       </div>
 
-      {/* Connection Status */}
       {!isConnected ? (
         <Card className="mb-6 border-yellow-200 bg-yellow-50" data-testid="connection-warning">
           <CardContent className="p-4">
@@ -293,7 +247,6 @@ export default function CreateTokenPage() {
         </Card>
       ) : (
         <>
-          {/* Balance and Fee Information */}
           <Card className="mb-6 border-blue-200 bg-blue-50">
             <CardHeader className="pb-4">
               <CardTitle className="flex items-center space-x-2 text-blue-800">
@@ -327,7 +280,6 @@ export default function CreateTokenPage() {
                 </div>
               </div>
 
-              {/* Balance Status */}
               {icpBalance && icpBalance.balance && !icpBalance.error && (
                 <div className={`p-3 rounded-lg flex items-center space-x-2 ${
                   hasSufficientBalance 
@@ -352,16 +304,15 @@ export default function CreateTokenPage() {
                 </div>
               )}
 
-              {/* Balance error message */}
-              {(balanceError || icpBalance?.error) && (
+              {icpBalance?.error && (
                 <div className="p-3 rounded-lg bg-yellow-100 border border-yellow-200">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-2">
                       <AlertTriangle className="h-5 w-5 text-yellow-600" />
                       <span className="text-yellow-800 font-medium">
-                        {icpBalance?.error === "Network connection error" 
+                        {icpBalance.error === "Network connection error" 
                           ? "Network error fetching balance. Please check your connection and try again."
-                          : icpBalance?.error === "Invalid principal format" || icpBalance?.error === "Invalid wallet principal format"
+                          : icpBalance.error === "Invalid principal format"
                           ? "Invalid wallet principal format. Please reconnect your wallet."
                           : "Unable to fetch ICP balance. You can still proceed with token creation."}
                       </span>
@@ -394,7 +345,6 @@ export default function CreateTokenPage() {
         </>
       )}
 
-      {/* Security Notice */}
       <Card className="mb-6 border-orange-200 bg-orange-50">
         <CardContent className="p-4">
           <div className="flex items-start space-x-2">
@@ -410,7 +360,6 @@ export default function CreateTokenPage() {
         </CardContent>
       </Card>
 
-      {/* Validation Errors */}
       {validationErrors.length > 0 && (
         <Card className="mb-6 border-red-200 bg-red-50">
           <CardContent className="p-4">
