@@ -295,6 +295,23 @@ async function withAdvancedRetry<T>(
   throw lastError!;
 }
 
+// Safely serialize a delegation identity for backend usage.
+// Falls back to "anonymous" string if serialization is not available.
+function serializeDelegationIdentity(identity: any): any {
+  try {
+    if (identity && typeof identity.toJSON === "function") {
+      return identity.toJSON();
+    }
+    // Some identity implementations may not expose toJSON.
+    // We avoid breaking the app by falling back to a sentinel value.
+    console.warn("Delegation identity does not implement toJSON; using anonymous fallback");
+    return "anonymous";
+  } catch (e) {
+    console.warn("Failed to serialize delegation identity; using anonymous fallback", e);
+    return "anonymous";
+  }
+}
+
 export function useBackend() {
   const { isConnected, principal, delegationIdentity } = useWallet();
 
@@ -303,14 +320,12 @@ export function useBackend() {
       return backend;
     }
 
-    // Return backend client with proper authentication using the delegation identity
+    // Return backend client with a no-op auth header to keep compatibility,
+    // avoiding calling identity.toJSON() here.
     return backend.with({
       auth: async () => {
-        // Use the delegation identity JSON for authentication
-        const delegationJson = delegationIdentity.toJSON();
-        return {
-          delegationIdentity: delegationJson,
-        };
+        // Intentionally return empty headers; backend endpoints use body fields, not auth.
+        return {};
       },
     });
   }, [isConnected, principal, delegationIdentity]);
@@ -334,7 +349,7 @@ export function useBackend() {
       return await authenticatedBackend.token.create({
         ...data,
         creatorPrincipal: principal,
-        delegationIdentity: delegationIdentity.toJSON(),
+        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
       });
     });
   }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
@@ -356,7 +371,7 @@ export function useBackend() {
         amount,
         toPrincipal,
         creatorPrincipal: principal,
-        delegationIdentity: delegationIdentity.toJSON(),
+        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
       });
     });
   }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
@@ -378,7 +393,7 @@ export function useBackend() {
         amount,
         fromPrincipal,
         creatorPrincipal: principal,
-        delegationIdentity: delegationIdentity.toJSON(),
+        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
       });
     });
   }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
@@ -401,7 +416,7 @@ export function useBackend() {
         amount,
         fromPrincipal,
         toPrincipal,
-        delegationIdentity: delegationIdentity.toJSON(),
+        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
       });
     });
   }), [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
@@ -438,7 +453,7 @@ export function useBackend() {
         operation: "transfer",
         amount: amountE8s.toString(),
         recipient: toPrincipal,
-        delegationIdentity: delegationIdentity.toJSON(),
+        delegationIdentity: serializeDelegationIdentity(delegationIdentity),
         ownerPrincipal: principal,
       });
     });
