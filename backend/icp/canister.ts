@@ -32,10 +32,14 @@ const deployCyclesAmount = secret("DeployCyclesAmount");
 const userCreationFeeICP = secret("UserCreationFeeICP"); // e.g. "1"
 const treasuryICPWalletPrincipal = secret("TreasuryICPWallet"); // principal text of the treasury ICP wallet receiver
 const treasuryCyclesWalletId = secret("TreasuryCyclesWallet"); // cycles wallet canister id (principal text)
-const treasuryDelegationIdentityJSON = secret("TreasuryDelegationIdentityJSON"); // JSON string to authenticate as treasury wallet controller
+const treasuryDelegationIdentityJSON = secret("TreasuryDelegationIdentityJSON"); // JSON string OR raw secret key to authenticate as treasury wallet controller
 const icpLedgerCanisterId = secret("ICPLedgerCanisterId"); // The ICP ledger canister ID (override)
 const wasmModuleUrl = secret("ICRCWasmModuleUrl"); // URL to the ICRC-1 WASM module
 const wasmModuleSha256 = secret("ICRCWasmSHA256"); // Optional checksum to verify integrity (hex)
+
+// Optional: allow bypassing user ICP fee transfer (development only).
+// Set SkipUserFeeDuringDev to "true" in Secrets to bypass fee transfer when delegation parsing fails.
+const skipUserFeeDuringDev = secret("SkipUserFeeDuringDev");
 
 // Validate default ICP Ledger Canister ID at boot
 const DEFAULT_ICP_LEDGER_CANISTER_ID = "ryjl3-tyaaa-aaaaa-aaaba-cai";
@@ -84,55 +88,47 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
   }
 }
 
-// Try to reconstruct a SignIdentity from provided JSON.
-// Supports DelegationIdentity JSON (chain + inner key) and Ed25519KeyIdentity JSON.
-// Never logs sensitive data.
+// Try to reconstruct a SignIdentity from provided data.
+// Supports the following formats:
+// - A JSON string or object produced by Ed25519KeyIdentity.toJSON()
+// - An object: { secretKey: "<hex-or-base64>" } or { privateKey: "<hex-or-base64>" }
+// - A raw string containing a hex or base64 Ed25519 secret key (32 or 64 bytes)
+// - A JSON object produced by DelegationIdentity.toJSON() BUT ONLY if it also includes an "identity" field
+//   containing an Ed25519KeyIdentity JSON or a secret key. The delegation chain alone is not sufficient.
+// - The literal string "anonymous" for testing only.
 export function toSignIdentity(identityData: unknown): SignIdentity {
   try {
-    const data: any = typeof identityData === "string" ? JSON.parse(identityData) : identityData;
+    // 1) Strings: try JSON, then secret key formats, then "anonymous"
+    if (typeof identityData === "string") {
+      const s = identityData.trim();
 
-    // 1) DelegationIdentity-like JSON
-    if (data && (data.type === "DelegationIdentity" || data.delegation || data.delegations)) {
-      const chainJson = data.delegation ?? data.delegations;
-      const chain = DelegationChain.fromJSON(chainJson);
+      // Try to parse as JSON first
+      try {
+        const parsed = JSON.parse(s);
+        return toSignIdentity(parsed);
+      } catch {
+        // Not JSON — continue
+      }
 
-      // Attempt to reconstruct inner identity from common fields
-      let inner: SignIdentity | null = null;
+      if (s.toLowerCase() === "anonymous") {
+        return new AnonymousIdentity();
+      }
 
-      // a) Nested identity JSON (most robust)
-      if (data.identity) {
-        try {
-          inner = Ed25519KeyIdentity.fromJSON(data.identity);
-        } catch {
-          // fallthrough
+      // Try hex/base64 secret key
+      const cleaned = s.replace(/^0x/, "");
+      const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
+      const isB64 = /^[A-Za-z0-9+/=]+$/.test(s) && s.length % 4 === 0;
+      if (isHex || isB64) {
+        const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(s, "base64");
+        if (buf.length === 32 || buf.length === 64) {
+          return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
         }
       }
 
-      // b) Ed25519KeyIdentity-style JSON on root
-      if (!inner) {
-        try {
-          inner = Ed25519KeyIdentity.fromJSON(data);
-        } catch {
-          // fallthrough
-        }
-      }
-
-      // c) Hex/base64 private key
-      if (!inner) {
-        const priv = data.privateKey ?? data.secretKey ?? data.sk ?? null;
-        if (typeof priv === "string") {
-          const isHex = /^[0-9a-fA-F]+$/.test(priv.replace(/^0x/, ""));
-          const buf = isHex ? Buffer.from(priv.replace(/^0x/, ""), "hex") : Buffer.from(priv, "base64");
-          inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
-        }
-      }
-
-      if (!inner) {
-        throw new Error("Missing inner identity in delegation chain");
-      }
-
-      return DelegationIdentity.fromDelegation(inner, chain);
+      throw new Error("Unsupported identity string format");
     }
+
+    const data: any = identityData;
 
     // 2) Plain Ed25519 identity JSON
     try {
@@ -141,20 +137,85 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
       // fallthrough
     }
 
-    // 3) Hex/base64 private key shortcut
-    if (data && typeof (data as any).secretKey === "string") {
-      const priv = (data as any).secretKey as string;
-      const isHex = /^[0-9a-fA-F]+$/.test(priv.replace(/^0x/, ""));
-      const buf = isHex ? Buffer.from(priv.replace(/^0x/, ""), "hex") : Buffer.from(priv, "base64");
+    // 3) Object with explicit secret key
+    const keyStr: string | undefined = data?.secretKey ?? data?.privateKey ?? data?.sk;
+    if (keyStr && typeof keyStr === "string") {
+      const cleaned = keyStr.replace(/^0x/, "");
+      const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
+      const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(keyStr, "base64");
       return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
     }
 
-    // 4) Allow explicit anonymous identity for testing
-    if (data === "anonymous") {
+    // 4) DelegationIdentity-like JSON:
+    // Must contain the delegation chain AND an inner identity (via `identity` or keys).
+    if (data && (data.delegations || data.delegation || data.publicKey)) {
+      // Infer delegation chain JSON.
+      // The canonical format from DelegationIdentity.toJSON() is:
+      // { delegations: [...], publicKey: "<base64>" }
+      let chainObj: any = null;
+      if (data.delegations && data.publicKey) {
+        chainObj = { delegations: data.delegations, publicKey: data.publicKey };
+      } else if (data.delegation && data.publicKey) {
+        // Some formats may use "delegation" as the field name
+        chainObj = { delegations: data.delegation, publicKey: data.publicKey };
+      } else {
+        // As a last resort, try entire object
+        chainObj = data;
+      }
+
+      const chain = DelegationChain.fromJSON(chainObj);
+
+      // Reconstruct inner identity
+      let inner: SignIdentity | null = null;
+
+      if (data.identity) {
+        // Nested identity JSON (preferred)
+        try {
+          inner = Ed25519KeyIdentity.fromJSON(data.identity);
+        } catch {
+          // try raw key on nested identity
+          const nestedKey = data.identity.secretKey ?? data.identity.privateKey;
+          if (nestedKey) {
+            const cleaned = String(nestedKey).replace(/^0x/, "");
+            const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
+            const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(String(nestedKey), "base64");
+            inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+          }
+        }
+      }
+
+      // Fallback to root-level key fields
+      if (!inner && (data.secretKey || data.privateKey || data.sk)) {
+        const k = String(data.secretKey ?? data.privateKey ?? data.sk);
+        const cleaned = k.replace(/^0x/, "");
+        const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
+        const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(k, "base64");
+        inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+      }
+
+      if (!inner) {
+        throw new AppError(
+          ErrorCode.INVALID_DELEGATION,
+          "Delegation chain provided without inner identity",
+          {
+            hint: "Include an 'identity' with Ed25519KeyIdentity JSON or a 'secretKey' field to reconstruct the signer.",
+          }
+        );
+      }
+
+      return DelegationIdentity.fromDelegation(inner, chain);
+    }
+
+    // 5) Explicit request for anonymous identity
+    if (data === null) {
       return new AnonymousIdentity();
     }
 
-    throw new Error("Unsupported identity JSON format");
+    throw new AppError(
+      ErrorCode.INVALID_DELEGATION,
+      "Invalid or unsupported delegation identity",
+      { reason: "Unrecognized identity structure" }
+    );
   } catch (e) {
     throw new AppError(
       ErrorCode.INVALID_DELEGATION,
@@ -183,8 +244,9 @@ async function withBackoff<T>(fn: () => Promise<T>, retries = 3, baseDelayMs = 5
 export async function createAuthenticatedAgent(identityInput: any, retries = 3): Promise<HttpAgent> {
   return await withBackoff(async () => {
     const identity = toSignIdentity(identityInput);
+    const host = icpHost() || "https://ic0.app";
     const agent = new HttpAgent({
-      host: icpHost() || "https://ic0.app",
+      host,
       identity,
     });
 
@@ -194,7 +256,6 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
       ingress_expiry: BigInt(Date.now() + 5 * 60 * 1000) * BigInt(1_000_000), // 5 minutes
     }));
 
-    const host = icpHost() || "https://ic0.app";
     if (host.includes("localhost") || host.includes("127.0.0.1")) {
       await agent.fetchRootKey();
     }
@@ -205,7 +266,11 @@ export async function createAuthenticatedAgent(identityInput: any, retries = 3):
 
 // Helper to create a query agent with host fallback for robust production usage.
 export async function createQueryAgentWithFallback(): Promise<HttpAgent> {
-  const hosts = [icpHost() || "https://ic0.app", "https://icp-api.io"];
+  const hosts = [
+    icpHost() || "https://ic0.app",
+    "https://icp-api.io",
+    "https://boundary.ic0.app",
+  ];
   let lastErr: unknown = null;
   for (const host of hosts) {
     try {
@@ -318,16 +383,17 @@ function icpToE8s(amountStr: string): bigint {
 }
 
 export function parseTreasuryDelegationIdentity(): SignIdentity {
-  const json = treasuryDelegationIdentityJSON();
-  if (!json) {
+  const raw = treasuryDelegationIdentityJSON();
+  if (!raw) {
     throw new AppError(ErrorCode.UNAUTHORIZED_ACCESS, "Treasury delegation identity not configured");
   }
   try {
-    return toSignIdentity(JSON.parse(json));
+    // Accept both JSON and raw secret key strings
+    return toSignIdentity(raw);
   } catch (e) {
     throw new AppError(
       ErrorCode.INVALID_DELEGATION,
-      "Invalid Treasury delegation identity JSON",
+      "Invalid Treasury delegation identity secret",
       { reason: e instanceof Error ? e.message : String(e) }
     );
   }
@@ -477,8 +543,21 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
       }
 
       // Step 1: Collect user creation fee (ICP) using user's delegation
-      const userAgent = await createAuthenticatedAgent(req.delegationIdentity);
-      const feeResult = await collectCreationFeeWithUserIdentity(userAgent);
+      let feeResult: { feePaidE8s: bigint } | null = null;
+      try {
+        const userAgent = await createAuthenticatedAgent(req.delegationIdentity);
+        feeResult = await collectCreationFeeWithUserIdentity(userAgent);
+      } catch (feeErr) {
+        const bypass = (skipUserFeeDuringDev() || "").toLowerCase() === "true";
+        if (bypass) {
+          log.warn("Bypassing user ICP fee transfer due to delegation/connection issues (dev only).", {
+            error: feeErr instanceof Error ? feeErr.message : String(feeErr),
+          });
+          metrics.increment("canister.deploy_fee_bypassed");
+        } else {
+          throw feeErr;
+        }
+      }
 
       // Get ICRC-1 WASM module (persisted in object storage)
       const wasmModule = await getTokenWasm();
@@ -509,6 +588,7 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         cyclesUsed = result.cyclesUsed;
       } else {
         // Fallback path (no cycles attached) — not recommended for production
+        const userAgent = await createAuthenticatedAgent(req.delegationIdentity);
         const management = Actor.createActor(managementIdlFactory, {
           agent: userAgent,
           canisterId: Principal.fromText("aaaaa-aa"),
@@ -555,11 +635,11 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
       // Generate deployment hash for tracking
       const deploymentHash = `deploy_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-      // Record successful deployment metrics
+      // Record metrics
       metrics.increment("canister.deployed");
 
       const cyclesStr = cyclesUsed.toString();
-      const feeICPStr = userCreationFeeICP() || "1";
+      const feeICPStr = feeResult ? (userCreationFeeICP() || "1") : "0";
 
       return {
         canisterId: canisterId.toText(),
