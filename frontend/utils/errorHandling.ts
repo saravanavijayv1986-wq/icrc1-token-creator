@@ -31,6 +31,17 @@ export function handleApiError(error: any): never {
     details = errorData.details;
   } else if (error instanceof Error) {
     message = error.message;
+    
+    // Extract specific error codes from error messages
+    if (message.includes('principal format') || message.includes('Invalid principal')) {
+      code = 'INVALID_PRINCIPAL_FORMAT';
+    } else if (message.includes('delegation') || message.includes('authentication')) {
+      code = 'AUTHENTICATION_ERROR';
+    } else if (message.includes('network') || message.includes('fetch')) {
+      code = 'NETWORK_ERROR';
+    } else if (message.includes('timeout')) {
+      code = 'TIMEOUT_ERROR';
+    }
   }
 
   toast({
@@ -51,6 +62,10 @@ function getUserFriendlyMessage(code: string, originalMessage: string): string {
     'INSUFFICIENT_FUNDS': 'Insufficient funds for this operation.',
     'TOKEN_DEPLOYMENT_FAILED': 'Token deployment failed. Please try again.',
     'INVALID_DELEGATION': 'Authentication expired. Please reconnect your wallet.',
+    'AUTHENTICATION_ERROR': 'Authentication failed. Please reconnect your wallet and try again.',
+    'INVALID_PRINCIPAL_FORMAT': 'Invalid wallet address format. Please reconnect your wallet to refresh your identity.',
+    'NETWORK_ERROR': 'Network connection error. Please check your internet connection and try again.',
+    'TIMEOUT_ERROR': 'Request timed out. Please try again.',
     'CANISTER_ERROR': 'Blockchain operation failed. Please try again.',
     'EXTERNAL_SERVICE_ERROR': 'External service is temporarily unavailable.',
     'BLOCKCHAIN_ERROR': 'Blockchain network error. Please try again later.',
@@ -74,11 +89,15 @@ export function withErrorHandling<T extends any[], R>(
       
       const message = error instanceof Error ? error.message : String(error);
       
-      toast({
-        title: "Operation Failed",
-        description: message,
-        variant: "destructive",
-      });
+      // Don't show toast for specific authentication errors that should be handled upstream
+      if (!message.includes('Wallet not connected') && 
+          !message.includes('Authentication expired')) {
+        toast({
+          title: "Operation Failed",
+          description: getUserFriendlyMessage('OPERATION_FAILED', message),
+          variant: "destructive",
+        });
+      }
       
       throw new AppError('OPERATION_FAILED', message);
     }
@@ -97,6 +116,15 @@ export async function withRetry<T>(
       return await operation();
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Don't retry certain types of errors
+      if (lastError.message.includes('authentication') ||
+          lastError.message.includes('delegation') ||
+          lastError.message.includes('unauthorized') ||
+          lastError.message.includes('invalid principal') ||
+          lastError.message.includes('permission denied')) {
+        break;
+      }
       
       if (attempt === maxRetries) {
         break;

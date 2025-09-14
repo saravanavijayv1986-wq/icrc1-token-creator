@@ -18,11 +18,15 @@ function isValidPrincipal(principal: string): boolean {
   if (!/^[a-z0-9-]+$/.test(principal)) return false;
   if (!principal.includes('-')) return false;
   
-  const shortPattern = /^[a-z0-9]{2,}-[a-z0-9]{3}$/;
-  const longPattern = /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/;
-  const mediumPattern = /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/;
+  // More flexible principal patterns to handle various formats
+  const patterns = [
+    /^[a-z0-9]{2,}-[a-z0-9]{3}$/, // Short format like "2vxsx-fae"
+    /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/, // Standard format
+    /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/, // Variable length segments
+    /^[a-z0-9]{27}$/, // Base32 without separators (convert to check)
+  ];
   
-  return shortPattern.test(principal) || longPattern.test(principal) || mediumPattern.test(principal);
+  return patterns.some(pattern => pattern.test(principal));
 }
 
 async function withRetry<T>(
@@ -38,6 +42,14 @@ async function withRetry<T>(
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       
+      // Don't retry on certain errors
+      if (lastError.message.includes('authentication') || 
+          lastError.message.includes('unauthorized') ||
+          lastError.message.includes('invalid principal') ||
+          lastError.message.includes('delegation')) {
+        break;
+      }
+
       if (attempt === maxRetries) {
         break;
       }
@@ -53,6 +65,31 @@ async function withRetry<T>(
 export function useBackend() {
   const { isConnected, principal, delegationIdentity } = useWallet();
 
+  // Create authenticated backend client
+  const getAuthenticatedBackend = useCallback(() => {
+    if (!isConnected || !principal || !delegationIdentity) {
+      return backend;
+    }
+
+    try {
+      return backend.with({
+        auth: async () => {
+          if (!delegationIdentity) {
+            throw new Error("No delegation identity available");
+          }
+          
+          // Create auth header with delegation
+          return {
+            authorization: `Bearer ${JSON.stringify(delegationIdentity.toJSON())}`
+          };
+        }
+      });
+    } catch (error) {
+      console.warn("Failed to create authenticated backend, falling back to unauthenticated:", error);
+      return backend;
+    }
+  }, [isConnected, principal, delegationIdentity]);
+
   const createToken = useCallback(async (data: {
     tokenName: string;
     symbol: string;
@@ -67,13 +104,14 @@ export function useBackend() {
     }
 
     return await withRetry(async () => {
-      return await backend.token.create({
+      const authBackend = getAuthenticatedBackend();
+      return await authBackend.token.create({
         ...data,
         creatorPrincipal: principal,
         delegationIdentity: delegationIdentity,
       });
     });
-  }, [isConnected, principal, delegationIdentity]);
+  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
 
   const mintTokens = useCallback(async (
     tokenId: number, 
@@ -85,7 +123,8 @@ export function useBackend() {
     }
 
     return await withRetry(async () => {
-      return await backend.token.mint({
+      const authBackend = getAuthenticatedBackend();
+      return await authBackend.token.mint({
         tokenId,
         amount,
         toPrincipal,
@@ -93,7 +132,7 @@ export function useBackend() {
         delegationIdentity: delegationIdentity,
       });
     });
-  }, [isConnected, principal, delegationIdentity]);
+  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
 
   const burnTokens = useCallback(async (
     tokenId: number, 
@@ -105,7 +144,8 @@ export function useBackend() {
     }
 
     return await withRetry(async () => {
-      return await backend.token.burn({
+      const authBackend = getAuthenticatedBackend();
+      return await authBackend.token.burn({
         tokenId,
         amount,
         fromPrincipal,
@@ -113,7 +153,7 @@ export function useBackend() {
         delegationIdentity: delegationIdentity,
       });
     });
-  }, [isConnected, principal, delegationIdentity]);
+  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
 
   const transferTokens = useCallback(async (
     tokenId: number, 
@@ -126,7 +166,8 @@ export function useBackend() {
     }
 
     return await withRetry(async () => {
-      return await backend.token.transfer({
+      const authBackend = getAuthenticatedBackend();
+      return await authBackend.token.transfer({
         tokenId,
         amount,
         fromPrincipal,
@@ -134,7 +175,7 @@ export function useBackend() {
         delegationIdentity: delegationIdentity,
       });
     });
-  }, [isConnected, principal, delegationIdentity]);
+  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
 
   const transferICP = useCallback(async (
     amountICP: string | number,
@@ -158,7 +199,8 @@ export function useBackend() {
     }
 
     return await withRetry(async () => {
-      return await backend.icp.performTokenOperation({
+      const authBackend = getAuthenticatedBackend();
+      return await authBackend.icp.performTokenOperation({
         canisterId: "dummy",
         operation: "transfer",
         amount: amountE8s.toString(),
@@ -167,7 +209,7 @@ export function useBackend() {
         ownerPrincipal: principal,
       });
     });
-  }, [isConnected, principal, delegationIdentity]);
+  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
 
   const getTokenBalance = useCallback(async (
     tokenId: number, 
@@ -219,8 +261,16 @@ export function useBackend() {
         return { balance: "0", error: "Request timed out" };
       } else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
         return { balance: "0", error: "Authentication error" };
+      } else if (errorMessage.includes('rate limit')) {
+        return { balance: "0", error: "Too many requests. Please wait and try again." };
+      } else if (errorMessage.includes('canister') || errorMessage.includes('replica')) {
+        return { balance: "0", error: "The Internet Computer network is temporarily unavailable. Please try again in a moment." };
+      } else if (errorMessage.includes('principal') || errorMessage.includes('invalid')) {
+        return { balance: "0", error: "Invalid wallet address format" };
+      } else if (errorMessage.includes('service') || errorMessage.includes('unavailable')) {
+        return { balance: "0", error: "Service is temporarily unavailable. Please try again." };
       } else {
-        return { balance: "0", error: "Unable to fetch balance" };
+        return { balance: "0", error: "Unable to fetch balance. Please check your connection and try again." };
       }
     }
   }, []);
@@ -232,7 +282,7 @@ export function useBackend() {
   }, []);
 
   return {
-    backend,
+    backend: getAuthenticatedBackend(),
     createToken,
     mintTokens,
     burnTokens,
