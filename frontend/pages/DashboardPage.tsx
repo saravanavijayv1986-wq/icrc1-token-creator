@@ -101,10 +101,11 @@ export default function DashboardPage() {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-10"
+                data-testid="search-input"
               />
             </div>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-48">
+              <SelectTrigger className="w-48" data-testid="status-filter">
                 <Filter className="mr-2 h-4 w-4" />
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
@@ -238,6 +239,7 @@ export default function DashboardPage() {
                                 className="h-7 w-7"
                                 onClick={() => handleCopy(token.canisterId)}
                                 title="Copy Canister ID"
+                                data-testid="copy-canister-id"
                               >
                                 <Copy className="h-4 w-4" />
                               </Button>
@@ -259,7 +261,7 @@ export default function DashboardPage() {
                               </a>
                             </Button>
                           )}
-                          <Button variant="outline" size="sm" asChild>
+                          <Button variant="outline" size="sm" asChild data-testid="token-details-button">
                             <Link to={`/tokens/${token.id}`}>
                               View Details
                             </Link>

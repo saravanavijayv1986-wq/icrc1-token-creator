@@ -318,6 +318,7 @@ export default function TokenDetailsPage() {
                   variant="ghost"
                   size="sm"
                   onClick={() => copyToClipboard(token.canisterId!)}
+                  data-testid="copy-canister-id"
                 >
                   <Copy className="h-4 w-4" />
                 </Button>

@@ -234,7 +234,7 @@ export default function CreateTokenPage() {
 
       {/* Connection Status */}
       {!isConnected ? (
-        <Card className="mb-6 border-yellow-200 bg-yellow-50">
+        <Card className="mb-6 border-yellow-200 bg-yellow-50" data-testid="connection-warning">
           <CardContent className="p-4">
             <div className="flex items-center space-x-2">
               <Info className="h-5 w-5 text-yellow-600" />
@@ -251,7 +251,7 @@ export default function CreateTokenPage() {
             <CardHeader className="pb-4">
               <CardTitle className="flex items-center space-x-2 text-blue-800">
                 <Wallet className="h-5 w-5" />
-                <span>Wallet Balance & Fees</span>
+                <span>Wallet Balance &amp; Fees</span>
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -398,6 +398,7 @@ export default function CreateTokenPage() {
                 <Label htmlFor="tokenName">Token Name *</Label>
                 <Input
                   id="tokenName"
+                  data-testid="token-name"
                   placeholder="e.g., My Awesome Token"
                   value={formData.tokenName}
                   onChange={(e) => handleInputChange("tokenName", e.target.value)}
@@ -413,6 +414,7 @@ export default function CreateTokenPage() {
                 <Label htmlFor="symbol">Symbol *</Label>
                 <Input
                   id="symbol"
+                  data-testid="token-symbol"
                   placeholder="e.g., MAT"
                   value={formData.symbol}
                   onChange={(e) => handleInputChange("symbol", e.target.value.toUpperCase())}
@@ -431,6 +433,7 @@ export default function CreateTokenPage() {
                 <Label htmlFor="totalSupply">Total Supply *</Label>
                 <Input
                   id="totalSupply"
+                  data-testid="total-supply"
                   type="number"
                   placeholder="e.g., 1000000"
                   value={formData.totalSupply}
@@ -448,6 +451,7 @@ export default function CreateTokenPage() {
                 <Label htmlFor="decimals">Decimals</Label>
                 <Input
                   id="decimals"
+                  data-testid="decimals"
                   type="number"
                   value={formData.decimals}
                   onChange={(e) => handleInputChange("decimals", e.target.value)}
@@ -467,6 +471,7 @@ export default function CreateTokenPage() {
                 <Input
                   id="logo"
                   type="file"
+                  data-testid="logo-upload"
                   accept={tokenConfig.validation.allowedImageTypes.join(',')}
                   onChange={handleLogoUpload}
                   className="flex-1"
@@ -497,6 +502,7 @@ export default function CreateTokenPage() {
                 </div>
                 <Switch
                   id="mintable"
+                  data-testid="mintable-switch"
                   checked={formData.isMintable}
                   onCheckedChange={(checked) => handleInputChange("isMintable", checked)}
                   disabled={createTokenMutation.isPending}
@@ -512,6 +518,7 @@ export default function CreateTokenPage() {
                 </div>
                 <Switch
                   id="burnable"
+                  data-testid="burnable-switch"
                   checked={formData.isBurnable}
                   onCheckedChange={(checked) => handleInputChange("isBurnable", checked)}
                   disabled={createTokenMutation.isPending}

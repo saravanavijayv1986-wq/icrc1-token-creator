@@ -166,6 +166,7 @@ export default function TokenSearch() {
               value={filters.query}
               onChange={(e) => updateFilter("query", e.target.value)}
               className="pl-10"
+              data-testid="search-input"
             />
           </div>
 
@@ -174,7 +175,7 @@ export default function TokenSearch() {
             <div className="space-y-2">
               <Label>Status</Label>
               <Select value={filters.status} onValueChange={(value) => updateFilter("status", value)}>
-                <SelectTrigger>
+                <SelectTrigger data-testid="status-filter">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -253,6 +254,7 @@ export default function TokenSearch() {
             <div className="flex items-center space-x-2">
               <Switch
                 id="mintable"
+                data-testid="mintable-filter"
                 checked={filters.isMintable === true}
                 onCheckedChange={(checked) => updateFilter("isMintable", checked ? true : undefined)}
               />
@@ -262,6 +264,7 @@ export default function TokenSearch() {
             <div className="flex items-center space-x-2">
               <Switch
                 id="burnable"
+                data-testid="burnable-filter"
                 checked={filters.isBurnable === true}
                 onCheckedChange={(checked) => updateFilter("isBurnable", checked ? true : undefined)}
               />
