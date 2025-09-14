@@ -231,13 +231,13 @@ describe("useBackend Hook", () => {
 
     const { result } = renderHook(() => useBackend());
 
-    const transferResult = await result.current.transferICP("1.5", "recipient-principal");
+    const transferResult = await result.current.transferICP("1.5", "rrkah-fqaaa-aaaah-qcuea-cai");
 
     expect(mockBackendWithAuth.icp.performTokenOperation).toHaveBeenCalledWith({
       canisterId: "dummy",
       operation: "transfer",
       amount: "150000000", // 1.5 ICP in e8s
-      recipient: "recipient-principal",
+      recipient: "rrkah-fqaaa-aaaah-qcuea-cai",
       delegationIdentity: { test: "delegation" },
       ownerPrincipal: "test-principal-123",
     });
@@ -255,7 +255,7 @@ describe("useBackend Hook", () => {
 
     // Test zero amount
     await expect(
-      result.current.transferICP("0", "valid-principal-123")
+      result.current.transferICP("0", "rrkah-fqaaa-aaaah-qcuea-cai")
     ).rejects.toThrow("Amount must be greater than 0");
 
     // Test missing recipient
@@ -285,14 +285,75 @@ describe("useBackend Hook", () => {
     expect(balanceResult).toEqual(mockBalanceResult);
   });
 
-  test("should get ICP balance with error handling", async () => {
-    mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error("Network error"));
+  test("should validate principals for ICP balance queries", async () => {
+    const { result } = renderHook(() => useBackend());
+
+    // Test invalid principals
+    const invalidPrincipals = [
+      "",
+      "too-short",
+      "UPPERCASE-NOT-ALLOWED",
+      "has@special#chars",
+      "no-hyphens-here",
+      "toolongprincipalidentifierthatexceedsmaximumlengthof63chars",
+    ];
+
+    for (const invalidPrincipal of invalidPrincipals) {
+      const balanceResult = await result.current.getICPBalance(invalidPrincipal);
+      expect(balanceResult.balance).toBe("0");
+      expect(balanceResult.error).toBeDefined();
+    }
+  });
+
+  test("should handle ICP balance network errors with retry", async () => {
+    mockBackendWithAuth.icp.getBalance
+      .mockRejectedValueOnce(new Error("Network connection failed"))
+      .mockRejectedValueOnce(new Error("Request timeout"))
+      .mockResolvedValue({ balance: "123456789" });
 
     const { result } = renderHook(() => useBackend());
 
-    const balanceResult = await result.current.getICPBalance("test-principal");
+    const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
 
-    expect(balanceResult).toEqual({ balance: "0", error: "Network connection error" });
+    expect(balanceResult.balance).toBe("123456789");
+    expect(mockBackendWithAuth.icp.getBalance).toHaveBeenCalledTimes(3);
+  });
+
+  test("should handle non-retryable ICP balance errors", async () => {
+    mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error("Authentication failed"));
+
+    const { result } = renderHook(() => useBackend());
+
+    const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
+
+    expect(balanceResult.balance).toBe("0");
+    expect(balanceResult.error).toContain("Authentication error");
+    expect(mockBackendWithAuth.icp.getBalance).toHaveBeenCalledTimes(1); // No retry for auth errors
+  });
+
+  test("should handle ICP balance response validation", async () => {
+    // Test invalid response format
+    mockBackendWithAuth.icp.getBalance.mockResolvedValue(null);
+
+    const { result } = renderHook(() => useBackend());
+
+    const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
+
+    expect(balanceResult.balance).toBe("0");
+    expect(balanceResult.error).toContain("Invalid response format");
+  });
+
+  test("should get ICP balance with error handling", async () => {
+    mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error("Canister unavailable"));
+
+    const { result } = renderHook(() => useBackend());
+
+    const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
+
+    expect(balanceResult).toEqual({ 
+      balance: "0", 
+      error: "The Internet Computer network is temporarily unavailable. Please try again in a moment."
+    });
   });
 
   test("should sync token with canister", async () => {
@@ -332,13 +393,46 @@ describe("useBackend Hook", () => {
     });
 
     for (const testCase of testCases) {
-      await result.current.transferICP(testCase.input, "test-principal-123");
+      await result.current.transferICP(testCase.input, "rrkah-fqaaa-aaaah-qcuea-cai");
       
       expect(mockBackendWithAuth.icp.performTokenOperation).toHaveBeenCalledWith(
         expect.objectContaining({
           amount: testCase.expected,
         })
       );
+    }
+  });
+
+  test("should handle rate limiting errors appropriately", async () => {
+    mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error("Rate limit exceeded"));
+
+    const { result } = renderHook(() => useBackend());
+
+    const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
+
+    expect(balanceResult.balance).toBe("0");
+    expect(balanceResult.error).toContain("Too many requests");
+  });
+
+  test("should classify various error types correctly", async () => {
+    const { result } = renderHook(() => useBackend());
+
+    const errorTestCases = [
+      { error: "Network connection failed", expectedMessage: "Network connection error" },
+      { error: "Request timeout", expectedMessage: "Request timed out" },
+      { error: "Unauthorized access", expectedMessage: "Authentication error" },
+      { error: "Canister not found", expectedMessage: "Internet Computer network" },
+      { error: "Invalid principal format", expectedMessage: "Invalid wallet address" },
+      { error: "Service unavailable", expectedMessage: "Service is temporarily unavailable" },
+    ];
+
+    for (const testCase of errorTestCases) {
+      mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error(testCase.error));
+      
+      const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
+      
+      expect(balanceResult.balance).toBe("0");
+      expect(balanceResult.error).toContain(testCase.expectedMessage);
     }
   });
 });

@@ -13,22 +13,286 @@ function icpToE8s(amount: string | number): bigint {
   return BigInt(intPart) * 100000000n + BigInt(fracPadded);
 }
 
-function isValidPrincipal(principal: string): boolean {
-  if (!principal || typeof principal !== 'string') {
-    return false;
+// Enhanced principal validation with specific error types
+enum PrincipalValidationError {
+  EMPTY = "EMPTY",
+  INVALID_TYPE = "INVALID_TYPE", 
+  TOO_SHORT = "TOO_SHORT",
+  TOO_LONG = "TOO_LONG",
+  INVALID_FORMAT = "INVALID_FORMAT",
+  INVALID_CHECKSUM = "INVALID_CHECKSUM"
+}
+
+interface PrincipalValidationResult {
+  isValid: boolean;
+  error?: PrincipalValidationError;
+  message?: string;
+}
+
+function validatePrincipal(principal: string): PrincipalValidationResult {
+  if (!principal) {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.EMPTY,
+      message: "Principal cannot be empty"
+    };
   }
   
-  // More flexible IC principal format validation
-  // Principals can have various formats:
-  // - Short form: "2vxsx-fae" 
-  // - Long form: "rrkah-fqaaa-aaaah-qcuea-cai"
-  // - Various canister formats
-  const principalPattern = /^[a-z0-9]+([-][a-z0-9]+)*$/;
+  if (typeof principal !== 'string') {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.INVALID_TYPE,
+      message: "Principal must be a string"
+    };
+  }
   
-  return principalPattern.test(principal) && 
-         principal.length >= 5 && 
-         principal.length <= 63 &&
-         principal.includes('-'); // All valid principals contain at least one dash
+  // Basic length validation
+  if (principal.length < 5) {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.TOO_SHORT,
+      message: "Principal is too short"
+    };
+  }
+  
+  if (principal.length > 63) {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.TOO_LONG,
+      message: "Principal is too long"
+    };
+  }
+
+  // Format validation: must contain only lowercase letters, numbers, and hyphens
+  if (!/^[a-z0-9-]+$/.test(principal)) {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.INVALID_FORMAT,
+      message: "Principal contains invalid characters (only lowercase letters, numbers, and hyphens allowed)"
+    };
+  }
+
+  // Must contain at least one hyphen (all valid principals have separators)
+  if (!principal.includes('-')) {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.INVALID_FORMAT,
+      message: "Principal must contain hyphens as separators"
+    };
+  }
+
+  // Validate IC principal format patterns
+  // Short form: "2vxsx-fae" (minimum valid format)
+  // Long form: "rrkah-fqaaa-aaaah-qcuea-cai" (canister format)
+  const shortPattern = /^[a-z0-9]{2,}-[a-z0-9]{3}$/;
+  const longPattern = /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/;
+  const mediumPattern = /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/;
+  
+  if (!shortPattern.test(principal) && !longPattern.test(principal) && !mediumPattern.test(principal)) {
+    return {
+      isValid: false,
+      error: PrincipalValidationError.INVALID_FORMAT,
+      message: "Principal does not match expected IC format"
+    };
+  }
+
+  return { isValid: true };
+}
+
+function isValidPrincipal(principal: string): boolean {
+  return validatePrincipal(principal).isValid;
+}
+
+// Enhanced error classification for balance queries
+enum BalanceErrorType {
+  NETWORK = "NETWORK",
+  TIMEOUT = "TIMEOUT", 
+  AUTHENTICATION = "AUTHENTICATION",
+  CANISTER_UNAVAILABLE = "CANISTER_UNAVAILABLE",
+  PRINCIPAL_INVALID = "PRINCIPAL_INVALID",
+  PERMISSION_DENIED = "PERMISSION_DENIED",
+  RATE_LIMITED = "RATE_LIMITED",
+  SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE",
+  UNKNOWN = "UNKNOWN"
+}
+
+interface ClassifiedError {
+  type: BalanceErrorType;
+  message: string;
+  isRetryable: boolean;
+  userMessage: string;
+}
+
+function classifyBalanceError(error: unknown): ClassifiedError {
+  const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  
+  // Network-related errors
+  if (errorMessage.includes('network') || 
+      errorMessage.includes('fetch') ||
+      errorMessage.includes('connection') ||
+      errorMessage.includes('connectivity')) {
+    return {
+      type: BalanceErrorType.NETWORK,
+      message: errorMessage,
+      isRetryable: true,
+      userMessage: "Network connection error. Please check your internet connection and try again."
+    };
+  }
+  
+  // Timeout errors
+  if (errorMessage.includes('timeout') || 
+      errorMessage.includes('timed out') ||
+      errorMessage.includes('deadline')) {
+    return {
+      type: BalanceErrorType.TIMEOUT,
+      message: errorMessage,
+      isRetryable: true,
+      userMessage: "Request timed out. The network may be slow. Please try again."
+    };
+  }
+  
+  // Authentication/authorization errors
+  if (errorMessage.includes('unauthorized') || 
+      errorMessage.includes('unauthenticated') ||
+      errorMessage.includes('authentication') ||
+      errorMessage.includes('auth')) {
+    return {
+      type: BalanceErrorType.AUTHENTICATION,
+      message: errorMessage,
+      isRetryable: false,
+      userMessage: "Authentication error. Please reconnect your wallet and try again."
+    };
+  }
+  
+  // Canister-specific errors
+  if (errorMessage.includes('canister') || 
+      errorMessage.includes('replica') ||
+      errorMessage.includes('ic0.app') ||
+      errorMessage.includes('dfinity')) {
+    return {
+      type: BalanceErrorType.CANISTER_UNAVAILABLE,
+      message: errorMessage,
+      isRetryable: true,
+      userMessage: "The Internet Computer network is temporarily unavailable. Please try again in a moment."
+    };
+  }
+  
+  // Principal validation errors
+  if (errorMessage.includes('principal') || 
+      errorMessage.includes('invalid') ||
+      errorMessage.includes('malformed')) {
+    return {
+      type: BalanceErrorType.PRINCIPAL_INVALID,
+      message: errorMessage,
+      isRetryable: false,
+      userMessage: "Invalid wallet address format. Please check your wallet connection."
+    };
+  }
+  
+  // Rate limiting
+  if (errorMessage.includes('rate') || 
+      errorMessage.includes('limit') ||
+      errorMessage.includes('throttle') ||
+      errorMessage.includes('too many')) {
+    return {
+      type: BalanceErrorType.RATE_LIMITED,
+      message: errorMessage,
+      isRetryable: true,
+      userMessage: "Too many requests. Please wait a moment before trying again."
+    };
+  }
+  
+  // Permission denied
+  if (errorMessage.includes('permission') || 
+      errorMessage.includes('forbidden') ||
+      errorMessage.includes('denied')) {
+    return {
+      type: BalanceErrorType.PERMISSION_DENIED,
+      message: errorMessage,
+      isRetryable: false,
+      userMessage: "Permission denied. You may not have access to this resource."
+    };
+  }
+  
+  // Service unavailable
+  if (errorMessage.includes('service') || 
+      errorMessage.includes('unavailable') ||
+      errorMessage.includes('maintenance') ||
+      errorMessage.includes('down')) {
+    return {
+      type: BalanceErrorType.SERVICE_UNAVAILABLE,
+      message: errorMessage,
+      isRetryable: true,
+      userMessage: "Service is temporarily unavailable. Please try again later."
+    };
+  }
+  
+  // Default case
+  return {
+    type: BalanceErrorType.UNKNOWN,
+    message: errorMessage,
+    isRetryable: true,
+    userMessage: "An unexpected error occurred while fetching balance. Please try again."
+  };
+}
+
+// Enhanced retry logic with exponential backoff and jitter
+async function withAdvancedRetry<T>(
+  operation: () => Promise<T>,
+  options: {
+    maxRetries?: number;
+    baseDelay?: number;
+    maxDelay?: number;
+    jitter?: boolean;
+    shouldRetry?: (error: any, attempt: number) => boolean;
+  } = {}
+): Promise<T> {
+  const {
+    maxRetries = 3,
+    baseDelay = 1000,
+    maxDelay = 30000,
+    jitter = true,
+    shouldRetry = (error, attempt) => {
+      const classified = classifyBalanceError(error);
+      return classified.isRetryable && attempt < maxRetries;
+    }
+  } = options;
+
+  let lastError: Error;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      if (!shouldRetry(error, attempt)) {
+        throw lastError;
+      }
+
+      if (attempt === maxRetries) {
+        break;
+      }
+
+      // Calculate delay with exponential backoff
+      let delay = Math.min(baseDelay * Math.pow(2, attempt - 1), maxDelay);
+      
+      // Add jitter to prevent thundering herd
+      if (jitter) {
+        delay = delay + Math.random() * delay * 0.1;
+      }
+
+      console.warn(`Balance query attempt ${attempt} failed, retrying in ${Math.round(delay)}ms:`, {
+        error: lastError.message,
+        attempt,
+        maxRetries
+      });
+
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError!;
 }
 
 export function useBackend() {
@@ -193,36 +457,56 @@ export function useBackend() {
   const getICPBalance = useCallback(async (
     targetPrincipal: string
   ) => {
-    // Basic principal validation first - be more lenient
-    if (!targetPrincipal || typeof targetPrincipal !== 'string' || targetPrincipal.length < 5) {
-      console.warn("Invalid principal format for ICP balance query:", targetPrincipal);
+    // Enhanced principal validation with detailed error messages
+    const validation = validatePrincipal(targetPrincipal);
+    if (!validation.isValid) {
+      console.warn("Invalid principal format for ICP balance query:", {
+        principal: targetPrincipal,
+        error: validation.error,
+        message: validation.message
+      });
+      
       return {
         balance: "0",
-        error: "Invalid principal format"
+        error: validation.message || "Invalid principal format"
       };
     }
 
     try {
-      // Use either authenticated or unauthenticated backend for balance queries
-      // Balance queries can often be done without authentication
       const backendClient = getAuthenticatedBackend();
       
-      // Use retry mechanism for better reliability
-      const result = await withRetry(async () => {
-        // Use the configured ICP Ledger Canister ID from the backend
-        // The backend will use the secret ICPLedgerCanisterId you configured
+      // Enhanced retry with smart error handling
+      const result = await withAdvancedRetry(async () => {
         return await backendClient.icp.getBalance({ 
           canisterId: "dummy", // This will be replaced by the backend with the actual ledger canister ID
           principal: targetPrincipal
         });
-      }, 2, 1000); // 2 retries with 1 second delay
+      }, {
+        maxRetries: 4, // Increased retries for balance queries
+        baseDelay: 800, // Slightly shorter initial delay
+        maxDelay: 20000, // Reasonable max delay
+        jitter: true,
+        shouldRetry: (error, attempt) => {
+          const classified = classifyBalanceError(error);
+          
+          // Don't retry principal validation errors
+          if (classified.type === BalanceErrorType.PRINCIPAL_INVALID ||
+              classified.type === BalanceErrorType.AUTHENTICATION ||
+              classified.type === BalanceErrorType.PERMISSION_DENIED) {
+            return false;
+          }
+          
+          // Retry network, timeout, and service errors
+          return classified.isRetryable && attempt < 4;
+        }
+      });
       
       // Validate the response format
       if (!result || typeof (result as any).balance === 'undefined') {
         console.warn("Invalid ICP balance response format:", result);
         return {
           balance: "0",
-          error: "Invalid response format"
+          error: "Invalid response format from balance service"
         };
       }
 
@@ -233,35 +517,22 @@ export function useBackend() {
         balance: (result as any).balance.toString(),
         error: backendError
       };
+      
     } catch (error) {
-      console.error("Failed to fetch ICP balance:", {
+      const classified = classifyBalanceError(error);
+      
+      console.error("Failed to fetch ICP balance after retries:", {
         principal: targetPrincipal,
         error: error instanceof Error ? error.message : String(error),
+        errorType: classified.type,
+        isRetryable: classified.isRetryable,
         stack: error instanceof Error ? error.stack : undefined
       });
-      
-      // Determine error type for better user feedback
-      let errorMessage = "Unknown error";
-      if (error instanceof Error) {
-        if (error.message.includes("network") || error.message.includes("fetch")) {
-          errorMessage = "Network connection error";
-        } else if (error.message.includes("timeout")) {
-          errorMessage = "Request timeout";
-        } else if (error.message.includes("unauthorized") || error.message.includes("authentication")) {
-          errorMessage = "Authentication error";
-        } else if (error.message.includes("canister") || error.message.includes("replica")) {
-          errorMessage = "Blockchain network error";
-        } else if (error.message.includes("principal") || error.message.includes("invalid")) {
-          errorMessage = "Invalid wallet principal format";
-        } else {
-          errorMessage = error.message;
-        }
-      }
 
-      // Return a safe default response structure instead of throwing
+      // Return safe default response with user-friendly error message
       return {
         balance: "0",
-        error: errorMessage
+        error: classified.userMessage
       };
     }
   }, [getAuthenticatedBackend]);
