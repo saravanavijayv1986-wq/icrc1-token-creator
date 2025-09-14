@@ -2,6 +2,7 @@ import { useState, useEffect, createContext, useContext, ReactNode } from "react
 import { AuthClient } from "@dfinity/auth-client";
 import { DelegationIdentity } from "@dfinity/identity";
 import { Principal } from "@dfinity/principal";
+import { walletConfig } from "../config";
 
 interface WalletContextType {
   isConnected: boolean;
@@ -43,39 +44,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           disableDefaultIdleCallback: true,
         },
       });
-
       setAuthClient(client);
 
-      // Check if already authenticated
       const isAuthenticated = await client.isAuthenticated();
       if (isAuthenticated) {
         const identity = client.getIdentity();
-        
-        // Validate that we have a proper delegation identity
         if (identity instanceof DelegationIdentity) {
-          try {
-            const principalId = identity.getPrincipal();
-            
-            // Validate principal format
-            if (principalId && !principalId.isAnonymous()) {
-              const principalText = principalId.toString();
-              
-              // Validate principal format more thoroughly
-              if (isValidPrincipalFormat(principalText)) {
-                setPrincipal(principalText);
-                setDelegationIdentity(identity);
-                setIsConnected(true);
-                console.log("Restored wallet connection:", principalText);
-              } else {
-                console.warn("Invalid principal format on restore, clearing session");
-                await client.logout();
-              }
-            } else {
-              console.warn("Anonymous principal detected, clearing session");
-              await client.logout();
-            }
-          } catch (error) {
-            console.error("Error validating restored identity:", error);
+          const principalId = identity.getPrincipal();
+          if (principalId && !principalId.isAnonymous()) {
+            setPrincipal(principalId.toString());
+            setDelegationIdentity(identity);
+            setIsConnected(true);
+            console.log("Restored wallet connection:", principalId.toString());
+          } else {
+            console.warn("Anonymous or invalid principal detected, clearing session");
             await client.logout();
           }
         } else {
@@ -88,22 +70,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const isValidPrincipalFormat = (principalText: string): boolean => {
-    if (!principalText || typeof principalText !== 'string') return false;
-    if (principalText.length < 5 || principalText.length > 63) return false;
-    if (!/^[a-z0-9-]+$/.test(principalText)) return false;
-    if (!principalText.includes('-')) return false;
-    
-    // Check various valid principal patterns
-    const patterns = [
-      /^[a-z0-9]{2,}-[a-z0-9]{3}$/, // Short format
-      /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/, // Standard format
-      /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/, // Variable length
-    ];
-    
-    return patterns.some(pattern => pattern.test(principalText));
-  };
-
   const connect = async (walletType: string) => {
     if (!authClient) {
       throw new Error("Auth client not initialized");
@@ -111,13 +77,15 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
     try {
       let identityProvider: string;
-      
+      let derivationOrigin: string | undefined;
+
       switch (walletType) {
         case "internet-identity":
-          identityProvider = "https://identity.ic0.app";
+          identityProvider = walletConfig.identityProviderUrl;
+          derivationOrigin = walletConfig.internetIdentity.derivationOrigin;
           break;
         case "nfid":
-          identityProvider = "https://nfid.one";
+          identityProvider = "https://nfid.one"; // Assuming NFID has one URL
           break;
         default:
           throw new Error(`Unsupported wallet type: ${walletType}`);
@@ -128,7 +96,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       await new Promise<void>((resolve, reject) => {
         authClient.login({
           identityProvider,
-          maxTimeToLive: BigInt(8 * 60 * 60 * 1000 * 1000 * 1000), // 8 hours in nanoseconds
+          maxTimeToLive: walletConfig.internetIdentity.maxTimeToLive,
+          derivationOrigin,
           onSuccess: () => {
             console.log("Authentication successful");
             resolve();
@@ -154,10 +123,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
 
       const principalText = principalObj.toString();
       
-      if (!isValidPrincipalFormat(principalText)) {
-        throw new Error(`Invalid principal format received: ${principalText.substring(0, 20)}...`);
-      }
-
       console.log("Wallet connected successfully:", principalText);
       
       setPrincipal(principalText);
@@ -167,12 +132,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.error("Wallet connection failed:", error);
       
-      // Clean up any partial state
       setPrincipal(null);
       setDelegationIdentity(null);
       setIsConnected(false);
       
-      // Provide more specific error messages
       if (error instanceof Error) {
         if (error.message.includes("User rejected")) {
           throw new Error("Connection was cancelled. Please try again and approve the connection.");
