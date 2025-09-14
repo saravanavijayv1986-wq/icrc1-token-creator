@@ -56,7 +56,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
    DeployCyclesAmount=3000000000000
    UserCreationFeeICP=1
    TreasuryICPWallet=<your-treasury-principal>
-   TreasuryCyclesWallet=<your-cycles-wallet-canister-id>
+   TreasuryCyclesWallet=kwhhn-qqaaa-aaaaj-qns2q-cai
    TreasuryDelegationIdentityJSON=<your-treasury-delegation-json>
    ICPLedgerCanisterId=ryjl3-tyaaa-aaaaa-aaaba-cai
    ICRCWasmModuleUrl=https://github.com/dfinity/ICRC-1/releases/download/v0.1.0/icrc1_ledger.wasm
@@ -98,7 +98,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
 | `DeployCyclesAmount` | Cycles for token canister deployment | `3000000000000` |
 | `UserCreationFeeICP` | Fee in ICP for token creation | `1` |
 | `TreasuryICPWallet` | Treasury wallet principal for fee collection | `rrkah-...` |
-| `TreasuryCyclesWallet` | Cycles wallet canister ID | `rdmx6-...` |
+| `TreasuryCyclesWallet` | Cycles wallet canister ID | `kwhhn-qqaaa-aaaaj-qns2q-cai` |
 | `TreasuryDelegationIdentityJSON` | Treasury identity for cycles wallet operations | `{...}` |
 
 ### Optional Configuration
