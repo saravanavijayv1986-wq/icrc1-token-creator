@@ -46,32 +46,7 @@ async function withRetry<T>(
 }
 
 export function useBackend() {
-  const { isConnected, principal, delegationIdentity } = useWallet();
-
-  // Create authenticated backend client
-  const getAuthenticatedBackend = useCallback(() => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      return backend;
-    }
-
-    try {
-      return backend.with({
-        auth: async () => {
-          if (!delegationIdentity) {
-            throw new Error("No delegation identity available");
-          }
-          
-          // Create auth header with delegation
-          return {
-            authorization: `Bearer ${JSON.stringify(delegationIdentity.toJSON())}`
-          };
-        }
-      });
-    } catch (error) {
-      console.warn("Failed to create authenticated backend, falling back to unauthenticated:", error);
-      return backend;
-    }
-  }, [isConnected, principal, delegationIdentity]);
+  const { isConnected, principal, delegationIdentity, identityJson } = useWallet();
 
   const createToken = useCallback(async (data: {
     tokenName: string;
@@ -82,61 +57,58 @@ export function useBackend() {
     isMintable?: boolean;
     isBurnable?: boolean;
   }) => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      throw new Error("Wallet not connected");
+    if (!isConnected || !principal || !identityJson) {
+      throw new Error("Wallet not connected. Please connect your wallet to perform this action.");
     }
 
     return await withRetry(async () => {
-      const authBackend = getAuthenticatedBackend();
-      return await authBackend.token.create({
+      return await backend.token.create({
         ...data,
         creatorPrincipal: principal,
-        delegationIdentity: delegationIdentity,
+        delegationIdentity: identityJson,
       });
     });
-  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, identityJson]);
 
   const mintTokens = useCallback(async (
     tokenId: number, 
     amount: number, 
     toPrincipal: string
   ) => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      throw new Error("Wallet not connected");
+    if (!isConnected || !principal || !identityJson) {
+      throw new Error("Wallet not connected. Please connect your wallet to perform this action.");
     }
 
     return await withRetry(async () => {
-      const authBackend = getAuthenticatedBackend();
-      return await authBackend.token.mint({
+      return await backend.token.mint({
         tokenId,
         amount,
         toPrincipal,
         creatorPrincipal: principal,
-        delegationIdentity: delegationIdentity,
+        delegationIdentity: identityJson,
       });
     });
-  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, identityJson]);
 
   const burnTokens = useCallback(async (
     tokenId: number, 
     amount: number, 
     fromPrincipal: string
   ) => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      throw new Error("Wallet not connected");
+    if (!isConnected || !principal || !identityJson) {
+      throw new Error("Wallet not connected. Please connect your wallet to perform this action.");
     }
 
     return await withRetry(async () => {
-      const authBackend = getAuthenticatedBackend();
-      return await authBackend.token.burn({
+      return await backend.token.burn({
         tokenId,
         amount,
         fromPrincipal,
         creatorPrincipal: principal,
-        delegationIdentity: delegationIdentity,
+        delegationIdentity: identityJson,
       });
     });
-  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, identityJson]);
 
   const transferTokens = useCallback(async (
     tokenId: number, 
@@ -144,32 +116,40 @@ export function useBackend() {
     fromPrincipal: string, 
     toPrincipal: string
   ) => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      throw new Error("Wallet not connected");
+    if (!isConnected || !principal || !identityJson) {
+      throw new Error("Wallet not connected. Please connect your wallet to perform this action.");
     }
 
     return await withRetry(async () => {
-      const authBackend = getAuthenticatedBackend();
-      return await authBackend.token.transfer({
+      return await backend.token.transfer({
         tokenId,
         amount,
         fromPrincipal,
         toPrincipal,
-        delegationIdentity: delegationIdentity,
+        delegationIdentity: identityJson,
       });
     });
-  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, identityJson]);
 
   const transferICP = useCallback(async (
     amountICP: string | number,
     toPrincipal: string
   ) => {
-    if (!isConnected || !principal || !delegationIdentity) {
-      throw new Error("Wallet not connected");
+    if (!isConnected || !principal || !identityJson) {
+      throw new Error("Wallet not connected. Please connect your wallet to perform this action.");
     }
 
     if (!toPrincipal) {
       throw new Error("Recipient principal is required");
+    }
+    
+    try {
+      const p = Principal.fromText(toPrincipal);
+      if (p.isAnonymous()) {
+        throw new Error("Cannot transfer to anonymous principal");
+      }
+    } catch (e) {
+      throw new Error("Invalid recipient principal format");
     }
 
     const amountE8s = icpToE8s(amountICP);
@@ -178,17 +158,16 @@ export function useBackend() {
     }
 
     return await withRetry(async () => {
-      const authBackend = getAuthenticatedBackend();
-      return await authBackend.icp.performTokenOperation({
+      return await backend.icp.performTokenOperation({
         canisterId: "dummy",
         operation: "transfer",
         amount: amountE8s.toString(),
         recipient: toPrincipal,
-        delegationIdentity: delegationIdentity,
+        delegationIdentity: identityJson,
         ownerPrincipal: principal,
       });
     });
-  }, [isConnected, principal, delegationIdentity, getAuthenticatedBackend]);
+  }, [isConnected, principal, identityJson]);
 
   const getTokenBalance = useCallback(async (
     tokenId: number, 
@@ -206,6 +185,15 @@ export function useBackend() {
       return {
         balance: "0",
         error: "Principal is required"
+      };
+    }
+    
+    try {
+      Principal.fromText(targetPrincipal);
+    } catch (e) {
+      return {
+        balance: "0",
+        error: "Invalid wallet principal format"
       };
     }
 
@@ -261,7 +249,7 @@ export function useBackend() {
   }, []);
 
   return {
-    backend: getAuthenticatedBackend(),
+    backend,
     createToken,
     mintTokens,
     burnTokens,

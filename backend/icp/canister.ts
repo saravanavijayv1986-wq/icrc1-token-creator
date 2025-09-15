@@ -72,133 +72,30 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
 }
 
 export function toSignIdentity(identityData: unknown): SignIdentity {
+  if (typeof identityData !== 'string' || identityData.trim() === '') {
+    throw new AppError(ErrorCode.INVALID_DELEGATION, "Delegation identity must be a non-empty JSON string.");
+  }
   try {
-    if (typeof identityData === "string") {
-      const s = identityData.trim();
-
-      try {
-        const parsed = JSON.parse(s);
-        return toSignIdentity(parsed);
-      } catch {
-        // Not JSON
-      }
-
-      if (s.toLowerCase() === "anonymous") {
-        return new AnonymousIdentity();
-      }
-
-      const cleaned = s.replace(/^0x/, "");
-      const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
-      const isB64 = /^[A-Za-z0-9+/=]+$/.test(s) && s.length % 4 === 0;
-      if (isHex || isB64) {
-        const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(s, "base64");
-        if (buf.length === 32 || buf.length === 64) {
-          return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
-        }
-      }
-
-      throw new AppError(ErrorCode.INVALID_DELEGATION, "Unsupported identity string format");
+    const parsed = JSON.parse(identityData);
+    if (!Array.isArray(parsed)) {
+      throw new Error("Identity JSON must be an array.");
     }
 
-    const data: any = identityData;
-
-    try {
-      return Ed25519KeyIdentity.fromJSON(data);
-    } catch {
-      // fallthrough
+    // Check if it's a DelegationIdentity representation: [identityJSON, chainJSON]
+    if (Array.isArray(parsed[0]) && typeof parsed[1] === 'object' && parsed[1] !== null && 'delegations' in parsed[1]) {
+      return DelegationIdentity.fromJSON(parsed);
     }
 
-    const keyStr: string | undefined = data?.secretKey ?? data?.privateKey ?? data?.sk;
-    if (keyStr && typeof keyStr === "string") {
-      const cleaned = keyStr.replace(/^0x/, "");
-      const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
-      const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(keyStr, "base64");
-      return Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
+    // Check if it's an Ed25519KeyIdentity representation: [pubkey, privkey]
+    if (typeof parsed[0] === 'string' && typeof parsed[1] === 'string') {
+      return Ed25519KeyIdentity.fromJSON(parsed);
     }
 
-    if (data && (data.delegations || data.delegation || data.publicKey)) {
-      let chainObj: any = null;
-      if (data.delegations && data.publicKey) {
-        chainObj = { delegations: data.delegations, publicKey: data.publicKey };
-      } else if (data.delegation && data.publicKey) {
-        chainObj = { delegations: data.delegation, publicKey: data.publicKey };
-      } else {
-        chainObj = data;
-      }
-
-      let chain: DelegationChain;
-      try {
-        chain = DelegationChain.fromJSON(chainObj);
-      } catch (error) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Failed to reconstruct delegation chain",
-          { reason: error instanceof Error ? error.message : String(error) }
-        );
-      }
-
-      let inner: SignIdentity | null = null;
-
-      if (data.identity) {
-        try {
-          inner = Ed25519KeyIdentity.fromJSON(data.identity);
-        } catch {
-          const nestedKey = data.identity.secretKey ?? data.identity.privateKey;
-          if (nestedKey && typeof nestedKey === 'string') {
-            try {
-              const cleaned = String(nestedKey).replace(/^0x/, "");
-              const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
-              const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(String(nestedKey), "base64");
-              inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
-            } catch (keyError) {
-              log.warn("Failed to reconstruct nested identity from key", {
-                error: keyError instanceof Error ? keyError.message : String(keyError)
-              });
-            }
-          }
-        }
-      }
-
-      if (!inner && (data.secretKey || data.privateKey || data.sk)) {
-        try {
-          const k = String(data.secretKey ?? data.privateKey ?? data.sk);
-          const cleaned = k.replace(/^0x/, "");
-          const isHex = /^[0-9a-fA-F]+$/.test(cleaned);
-          const buf = isHex ? Buffer.from(cleaned, "hex") : Buffer.from(k, "base64");
-          inner = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(buf));
-        } catch (keyError) {
-          log.warn("Failed to reconstruct identity from root-level key", {
-            error: keyError instanceof Error ? keyError.message : String(keyError)
-          });
-        }
-      }
-
-      if (!inner) {
-        throw new AppError(
-          ErrorCode.INVALID_DELEGATION,
-          "Delegation chain provided without valid inner identity"
-        );
-      }
-
-      return DelegationIdentity.fromDelegation(inner, chain);
-    }
-
-    if (data === null) {
-      return new AnonymousIdentity();
-    }
-
-    throw new AppError(
-      ErrorCode.INVALID_DELEGATION,
-      "Invalid or unsupported delegation identity",
-      { reason: "Unrecognized identity structure" }
-    );
+    throw new Error("Unrecognized identity format in JSON");
   } catch (e) {
-    if (e instanceof AppError) {
-      throw e;
-    }
     throw new AppError(
       ErrorCode.INVALID_DELEGATION,
-      "Invalid or unsupported delegation identity",
+      "Failed to reconstruct identity from JSON",
       { reason: e instanceof Error ? e.message : String(e) }
     );
   }
@@ -1497,6 +1394,7 @@ export interface BalanceRequest {
 
 export interface BalanceResponse {
   balance: string;
+  error?: string;
 }
 
 export const getBalance = api<BalanceRequest, BalanceResponse>(

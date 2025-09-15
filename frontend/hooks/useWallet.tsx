@@ -8,6 +8,7 @@ interface WalletContextType {
   isConnected: boolean;
   principal: string | null;
   delegationIdentity: DelegationIdentity | null;
+  identityJson: string | null;
   authClient: AuthClient | null;
   connect: (walletType: string) => Promise<void>;
   disconnect: () => void;
@@ -29,6 +30,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [principal, setPrincipal] = useState<string | null>(null);
   const [delegationIdentity, setDelegationIdentity] = useState<DelegationIdentity | null>(null);
+  const [identityJson, setIdentityJson] = useState<string | null>(null);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
 
   useEffect(() => {
@@ -54,6 +56,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           if (principalId && !principalId.isAnonymous()) {
             setPrincipal(principalId.toString());
             setDelegationIdentity(identity);
+            const idJson = localStorage.getItem('ic-identity');
+            setIdentityJson(idJson);
             setIsConnected(true);
             console.log("Restored wallet connection:", principalId.toString());
           } else {
@@ -127,6 +131,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       
       setPrincipal(principalText);
       setDelegationIdentity(identity);
+      const idJson = localStorage.getItem('ic-identity');
+      setIdentityJson(idJson);
       setIsConnected(true);
       
     } catch (error) {
@@ -134,6 +140,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       
       setPrincipal(null);
       setDelegationIdentity(null);
+      setIdentityJson(null);
       setIsConnected(false);
       
       if (error instanceof Error) {
@@ -142,7 +149,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         } else if (error.message.includes("network") || error.message.includes("fetch")) {
           throw new Error("Network error. Please check your connection and try again.");
         } else if (error.message.includes("principal")) {
-          throw new Error("Authentication failed: Invalid identity format. Please try reconnecting.");
+          throw new Error("Authentication failed: Invalid identity format. Please reconnect your wallet.");
         } else {
           throw new Error(`Connection failed: ${error.message}`);
         }
@@ -163,6 +170,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Always clear state regardless of logout success
       setPrincipal(null);
       setDelegationIdentity(null);
+      setIdentityJson(null);
       setIsConnected(false);
       console.log("Wallet disconnected");
     }
@@ -182,6 +190,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       isConnected,
       principal,
       delegationIdentity,
+      identityJson,
       authClient,
       connect,
       disconnect,
