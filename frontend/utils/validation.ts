@@ -1,3 +1,5 @@
+import { Principal } from "@dfinity/principal";
+
 export interface ValidationRule {
   required?: boolean;
   minLength?: number;
@@ -107,7 +109,15 @@ export const validationRules = {
   
   principal: {
     required: true,
-    pattern: /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/,
+    custom: (value: any) => {
+      if (typeof value !== 'string' || value.length === 0) return false;
+      try {
+        Principal.fromText(value);
+        return true;
+      } catch {
+        return false;
+      }
+    },
     message: "Invalid principal format"
   },
   

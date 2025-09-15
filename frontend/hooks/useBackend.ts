@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useWallet } from "./useWallet";
 import backend from "~backend/client";
+import { Principal } from "@dfinity/principal";
 
 function icpToE8s(amount: string | number): bigint {
   const str = String(amount).trim();
@@ -184,7 +185,7 @@ export function useBackend() {
     if (!targetPrincipal) {
       return {
         balance: "0",
-        error: "Principal is required"
+        error: "principal_required"
       };
     }
     
@@ -193,7 +194,7 @@ export function useBackend() {
     } catch (e) {
       return {
         balance: "0",
-        error: "Invalid wallet principal format"
+        error: "invalid_principal"
       };
     }
 
@@ -208,7 +209,7 @@ export function useBackend() {
       if (!result || typeof result.balance === 'undefined') {
         return {
           balance: "0",
-          error: "Invalid response format"
+          error: "invalid_response"
         };
       }
 
@@ -223,21 +224,21 @@ export function useBackend() {
       const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
       
       if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
-        return { balance: "0", error: "Network connection error" };
+        return { balance: "0", error: "network_error" };
       } else if (errorMessage.includes('timeout')) {
-        return { balance: "0", error: "Request timed out" };
+        return { balance: "0", error: "timeout" };
       } else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
-        return { balance: "0", error: "Authentication error" };
+        return { balance: "0", error: "auth_error" };
       } else if (errorMessage.includes('rate limit')) {
-        return { balance: "0", error: "Too many requests. Please wait and try again." };
+        return { balance: "0", error: "rate_limit" };
       } else if (errorMessage.includes('canister') || errorMessage.includes('replica')) {
-        return { balance: "0", error: "The Internet Computer network is temporarily unavailable. Please try again in a moment." };
+        return { balance: "0", error: "network_unavailable" };
       } else if (errorMessage.includes('principal') || errorMessage.includes('invalid')) {
-        return { balance: "0", error: "Invalid wallet principal format" };
+        return { balance: "0", error: "invalid_principal" };
       } else if (errorMessage.includes('service') || errorMessage.includes('unavailable')) {
-        return { balance: "0", error: "Service is temporarily unavailable. Please try again." };
+        return { balance: "0", error: "service_unavailable" };
       } else {
-        return { balance: "0", error: "Unable to fetch balance. Please check your connection and try again." };
+        return { balance: "0", error: "unknown_error" };
       }
     }
   }, []);

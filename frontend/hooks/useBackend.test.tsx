@@ -290,7 +290,6 @@ describe("useBackend Hook", () => {
 
     // Test invalid principals
     const invalidPrincipals = [
-      "",
       "too-short",
       "UPPERCASE-NOT-ALLOWED",
       "has@special#chars",
@@ -301,8 +300,13 @@ describe("useBackend Hook", () => {
     for (const invalidPrincipal of invalidPrincipals) {
       const balanceResult = await result.current.getICPBalance(invalidPrincipal);
       expect(balanceResult.balance).toBe("0");
-      expect(balanceResult.error).toBeDefined();
+      expect(balanceResult.error).toBe("invalid_principal");
     }
+
+    // Test empty principal
+    const emptyResult = await result.current.getICPBalance("");
+    expect(emptyResult.balance).toBe("0");
+    expect(emptyResult.error).toBe("principal_required");
   });
 
   test("should handle ICP balance network errors with retry", async () => {
@@ -327,7 +331,7 @@ describe("useBackend Hook", () => {
     const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
 
     expect(balanceResult.balance).toBe("0");
-    expect(balanceResult.error).toContain("Authentication error");
+    expect(balanceResult.error).toContain("auth_error"); // Changed to code
     expect(mockBackendWithAuth.icp.getBalance).toHaveBeenCalledTimes(1); // No retry for auth errors
   });
 
@@ -340,7 +344,7 @@ describe("useBackend Hook", () => {
     const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
 
     expect(balanceResult.balance).toBe("0");
-    expect(balanceResult.error).toContain("Invalid response format");
+    expect(balanceResult.error).toContain("invalid_response"); // Changed to code
   });
 
   test("should get ICP balance with error handling", async () => {
@@ -352,7 +356,7 @@ describe("useBackend Hook", () => {
 
     expect(balanceResult).toEqual({ 
       balance: "0", 
-      error: "The Internet Computer network is temporarily unavailable. Please try again in a moment."
+      error: "network_unavailable" // Changed to code
     });
   });
 
@@ -411,19 +415,19 @@ describe("useBackend Hook", () => {
     const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
 
     expect(balanceResult.balance).toBe("0");
-    expect(balanceResult.error).toContain("Too many requests");
+    expect(balanceResult.error).toContain("rate_limit"); // Changed to code
   });
 
   test("should classify various error types correctly", async () => {
     const { result } = renderHook(() => useBackend());
 
     const errorTestCases = [
-      { error: "Network connection failed", expectedMessage: "Network connection error" },
-      { error: "Request timeout", expectedMessage: "Request timed out" },
-      { error: "Unauthorized access", expectedMessage: "Authentication error" },
-      { error: "Canister not found", expectedMessage: "Internet Computer network" },
-      { error: "Invalid principal format", expectedMessage: "Invalid wallet address" },
-      { error: "Service unavailable", expectedMessage: "Service is temporarily unavailable" },
+      { error: "Network connection failed", expectedMessage: "network_error" },
+      { error: "Request timeout", expectedMessage: "timeout" },
+      { error: "Unauthorized access", expectedMessage: "auth_error" },
+      { error: "Canister not found", expectedMessage: "network_unavailable" },
+      { error: "Invalid principal format", expectedMessage: "invalid_principal" },
+      { error: "Service unavailable", expectedMessage: "service_unavailable" },
     ];
 
     for (const testCase of errorTestCases) {

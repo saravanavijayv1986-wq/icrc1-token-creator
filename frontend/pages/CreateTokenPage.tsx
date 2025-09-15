@@ -13,6 +13,19 @@ import { tokenConfig } from "../config";
 import { validateTokenCreation } from "../utils/validation";
 import { withErrorHandling } from "../utils/errorHandling";
 
+const friendlyErrorMessages: Record<string, string> = {
+  "network_error": "Network error fetching balance. Please check your connection and try again.",
+  "invalid_principal": "Invalid wallet principal format. Please reconnect your wallet.",
+  "timeout": "Request timed out. The IC network might be busy. Please try again.",
+  "auth_error": "Authentication error. Please reconnect your wallet.",
+  "rate_limit": "Too many requests. Please wait and try again.",
+  "network_unavailable": "The Internet Computer network is temporarily unavailable. Please try again in a moment.",
+  "service_unavailable": "Service is temporarily unavailable. Please try again.",
+  "unknown_error": "Unable to fetch ICP balance. Please check your connection and try again.",
+  "invalid_response": "Received an invalid response from the network.",
+  "principal_required": "Wallet principal not found. Please connect your wallet.",
+};
+
 export default function CreateTokenPage() {
   const [formData, setFormData] = useState({
     tokenName: "",
@@ -208,9 +221,10 @@ export default function CreateTokenPage() {
     }
     
     if (icpBalance?.error) {
+      const errorMessage = friendlyErrorMessages[icpBalance.error] || icpBalance.error;
       return (
         <div className="flex items-center space-x-2">
-          <span className="text-red-600 text-sm">{icpBalance.error}</span>
+          <span className="text-red-600 text-sm">{errorMessage}</span>
           <Button variant="ghost" size="sm" onClick={() => refetchBalance()}>
             Retry
           </Button>
@@ -286,13 +300,7 @@ export default function CreateTokenPage() {
                     <div className="flex items-center space-x-2">
                       <AlertTriangle className="h-5 w-5 text-yellow-600" />
                       <span className="text-yellow-800 font-medium">
-                        {icpBalance.error === "Network connection error" 
-                          ? "Network error fetching balance. Please check your connection and try again."
-                          : icpBalance.error === "Invalid principal format"
-                          ? "Invalid wallet principal format. Please reconnect your wallet."
-                          : icpBalance.error === "Request timed out"
-                          ? "Request timed out. The IC network might be busy. Please try again."
-                          : "Unable to fetch ICP balance. You can still proceed with token creation."}
+                        {friendlyErrorMessages[icpBalance.error] || "Unable to fetch ICP balance. You can still proceed with token creation."}
                       </span>
                     </div>
                     <Button variant="outline" size="sm" onClick={() => refetchBalance()}>
