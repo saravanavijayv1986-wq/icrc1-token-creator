@@ -2,7 +2,7 @@ import { useState, useEffect, createContext, useContext, ReactNode, useCallback,
 import { AuthClient } from "@dfinity/auth-client";
 import { DelegationIdentity } from "@dfinity/identity";
 import { Principal } from "@dfinity/principal";
-import { walletConfig } from "../config";
+import { walletConfig, environment } from "../config";
 
 interface WalletContextType {
   isConnected: boolean;
@@ -106,7 +106,10 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       switch (walletType) {
         case "internet-identity":
           identityProvider = walletConfig.identityProviderUrl;
-          derivationOrigin = walletConfig.internetIdentity.derivationOrigin;
+          // Only set derivationOrigin for production builds to avoid local dev issues
+          if (environment.isProduction) {
+            derivationOrigin = walletConfig.internetIdentity.derivationOrigin;
+          }
           break;
         default:
           throw new Error(`Unsupported wallet type: ${walletType}`);
