@@ -31,7 +31,7 @@ export default function CreateTokenPage() {
   const { toast } = useToast();
   const { createToken, getICPBalance, isConnected, principal } = useBackend();
 
-  const { data: icpBalance, isLoading: balanceLoading, refetch: refetchBalance } = useQuery({
+  const { data: icpBalance, isFetching: balanceLoading, refetch: refetchBalance } = useQuery({
     queryKey: ["icp-balance", principal],
     queryFn: async () => {
       if (!principal) return null;
@@ -314,6 +314,8 @@ export default function CreateTokenPage() {
                           ? "Network error fetching balance. Please check your connection and try again."
                           : icpBalance.error === "Invalid principal format"
                           ? "Invalid wallet principal format. Please reconnect your wallet."
+                          : icpBalance.error === "Request timed out"
+                          ? "Request timed out. The IC network might be busy. Please try again."
                           : "Unable to fetch ICP balance. You can still proceed with token creation."}
                       </span>
                     </div>
@@ -565,7 +567,7 @@ export default function CreateTokenPage() {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground mt-3">
-                Your Internet Identity will be the controller with full management rights. 
+                Your Internet Identity will be the controller of the deployed token canister. 
                 Token data and transactions are permanently stored on the blockchain.
               </p>
             </div>

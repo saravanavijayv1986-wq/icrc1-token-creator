@@ -833,10 +833,10 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
           "Canister deployed successfully",
           "blockchain",
           "info",
-          {
+          { 
             canisterId: canisterId.toText(),
             cyclesUsed: cyclesUsed.toString(),
-            symbol: req.symbol
+            status: "deployed"
           }
         );
 
@@ -1566,7 +1566,22 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
           subaccount: req.subaccount ? [new Uint8Array(Buffer.from(req.subaccount, "hex"))] : [],
         };
 
-        const balance = await withBackoff(() => tokenActor.icrc1_balance_of(account), 3, 500);
+        const withTimeout = <T,>(p: Promise<T>, ms: number) =>
+          new Promise<T>((resolve, reject) => {
+            const to = setTimeout(() => reject(new Error("Request timeout")), ms);
+            p.then(
+              (v) => {
+                clearTimeout(to);
+                resolve(v);
+              },
+              (e) => {
+                clearTimeout(to);
+                reject(e);
+              }
+            );
+          });
+
+        const balance = await withBackoff(() => withTimeout(tokenActor.icrc1_balance_of(account), 15000), 3, 500);
 
         logger.completeOperation(
           operationId,
