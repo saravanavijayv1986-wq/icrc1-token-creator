@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,16 @@ const friendlyErrorMessages: Record<string, string> = {
   "principal_required": "Wallet principal not found. Please connect your wallet.",
 };
 
+function icpToE8s(amount: string | number): bigint {
+  const str = String(amount).trim();
+  if (!/^\d+(\.\d+)?$/.test(str)) {
+    throw new Error("Invalid ICP amount");
+  }
+  const [intPart, fracPart = ""] = str.split(".");
+  const fracPadded = (fracPart + "00000000").slice(0, 8);
+  return BigInt(intPart) * 100000000n + BigInt(fracPadded);
+}
+
 export default function CreateTokenPage() {
   const [formData, setFormData] = useState({
     tokenName: "",
@@ -43,6 +53,7 @@ export default function CreateTokenPage() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { createToken, getICPBalance, isConnected, principal } = useBackend();
+  const queryClient = useQueryClient();
 
   const { data: icpBalance, isFetching: balanceLoading, refetch: refetchBalance } = useQuery({
     queryKey: ["icp-balance", principal],
@@ -62,12 +73,28 @@ export default function CreateTokenPage() {
         title: "Token Created Successfully!",
         description: `Your ICRC-1 token has been deployed to canister: ${data.canisterId}`,
       });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-tokens"] });
       navigate(`/tokens/${data.tokenId}`);
     },
     onError: (error) => {
       console.error("Token creation failed:", error);
     },
   });
+
+  const formatICPBalance = (balance: string) => {
+    try {
+      const balanceE8s = BigInt(balance);
+      const icpPart = balanceE8s / 100000000n;
+      const fracPart = balanceE8s % 100000000n;
+      return `${icpPart}.${fracPart.toString().padStart(8, '0')}`;
+    } catch (e) {
+      return "0.00000000";
+    }
+  };
+
+  const hasSufficientBalance = icpBalance && icpBalance.balance && !icpBalance.error ? 
+    BigInt(icpBalance.balance) >= icpToE8s(tokenConfig.fees.creationFeeICP) : 
+    false;
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -168,18 +195,24 @@ export default function CreateTokenPage() {
       return;
     }
 
-    if (icpBalance && icpBalance.balance && !icpBalance.error) {
-      const balanceICP = parseInt(icpBalance.balance) / 100000000;
-      const requiredICP = parseFloat(tokenConfig.fees.creationFeeICP);
-      
-      if (balanceICP < requiredICP) {
-        toast({
-          title: "Insufficient Balance",
-          description: `You need at least ${requiredICP} ICP to create a token. Current balance: ${balanceICP.toFixed(8)} ICP`,
-          variant: "destructive",
-        });
-        return;
-      }
+    if (!icpBalance || !icpBalance.balance || icpBalance.error) {
+      toast({
+        title: "Balance Check Required",
+        description: "Could not verify your ICP balance. Please try again.",
+        variant: "destructive",
+      });
+      refetchBalance();
+      return;
+    }
+
+    const requiredE8s = icpToE8s(tokenConfig.fees.creationFeeICP);
+    if (BigInt(icpBalance.balance) < requiredE8s) {
+      toast({
+        title: "Insufficient Balance",
+        description: `You need at least ${tokenConfig.fees.creationFeeICP} ICP to create a token. Current balance: ${formatICPBalance(icpBalance.balance)} ICP`,
+        variant: "destructive",
+      });
+      return;
     }
 
     const isValid = await validateForm();
@@ -205,15 +238,6 @@ export default function CreateTokenPage() {
       logoFile: formData.logoFile || undefined,
     });
   };
-
-  const formatICPBalance = (balance: string) => {
-    const balanceICP = parseInt(balance) / 100000000;
-    return balanceICP.toFixed(8);
-  };
-
-  const hasSufficientBalance = icpBalance && icpBalance.balance && !icpBalance.error ? 
-    (parseInt(icpBalance.balance) / 100000000) >= parseFloat(tokenConfig.fees.creationFeeICP) : 
-    false;
 
   const getBalanceDisplay = () => {
     if (balanceLoading) {
@@ -242,7 +266,8 @@ export default function CreateTokenPage() {
   const isButtonDisabled = createTokenMutation.isPending || 
                            !isConnected || 
                            isValidating || 
-                           (icpBalance && !icpBalance.error && !hasSufficientBalance);
+                           balanceLoading ||
+                           !hasSufficientBalance;
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-2xl">
@@ -573,7 +598,12 @@ export default function CreateTokenPage() {
                   <span>Balance After:</span>
                   <span className="font-semibold">
                     {icpBalance && icpBalance.balance && !icpBalance.error ? 
-                      `${(parseFloat(formatICPBalance(icpBalance.balance)) - parseFloat(tokenConfig.fees.creationFeeICP)).toFixed(8)} ICP` : 
+                      (() => {
+                        const balanceE8s = BigInt(icpBalance.balance);
+                        const feeE8s = icpToE8s(tokenConfig.fees.creationFeeICP);
+                        const afterBalance = balanceE8s - feeE8s;
+                        return `${afterBalance < 0n ? '0.00000000' : formatICPBalance(afterBalance.toString())} ICP`;
+                      })() : 
                       "Calculate after connection"
                     }
                   </span>
