@@ -92,9 +92,9 @@ export default function CreateTokenPage() {
     }
   };
 
-  const hasSufficientBalance = icpBalance && icpBalance.balance && !icpBalance.error ? 
-    BigInt(icpBalance.balance) >= icpToE8s(tokenConfig.fees.creationFeeICP) : 
-    false;
+  const isBalanceSufficient = !icpBalance || icpBalance.error ? true : (
+    icpBalance.balance && BigInt(icpBalance.balance) >= icpToE8s(tokenConfig.fees.creationFeeICP)
+  );
 
   const handleInputChange = (field: string, value: string | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -195,25 +195,24 @@ export default function CreateTokenPage() {
       return;
     }
 
-    if (!icpBalance || !icpBalance.balance || icpBalance.error) {
+    if (icpBalance && !icpBalance.error) {
+      const requiredE8s = icpToE8s(tokenConfig.fees.creationFeeICP);
+      if (BigInt(icpBalance.balance) < requiredE8s) {
+        toast({
+          title: "Insufficient Balance",
+          description: `You need at least ${tokenConfig.fees.creationFeeICP} ICP to create a token. Current balance: ${formatICPBalance(icpBalance.balance)} ICP`,
+          variant: "destructive",
+        });
+        return;
+      }
+    } else if (icpBalance && icpBalance.error) {
       toast({
-        title: "Balance Check Required",
-        description: "Could not verify your ICP balance. Please try again.",
-        variant: "destructive",
+        title: "Balance Check Failed",
+        description: "Could not verify your ICP balance, but you can still attempt to create a token. It may fail if your balance is insufficient.",
+        variant: "default",
       });
-      refetchBalance();
-      return;
     }
 
-    const requiredE8s = icpToE8s(tokenConfig.fees.creationFeeICP);
-    if (BigInt(icpBalance.balance) < requiredE8s) {
-      toast({
-        title: "Insufficient Balance",
-        description: `You need at least ${tokenConfig.fees.creationFeeICP} ICP to create a token. Current balance: ${formatICPBalance(icpBalance.balance)} ICP`,
-        variant: "destructive",
-      });
-      return;
-    }
 
     const isValid = await validateForm();
     if (!isValid) {
@@ -267,7 +266,7 @@ export default function CreateTokenPage() {
                            !isConnected || 
                            isValidating || 
                            balanceLoading ||
-                           !hasSufficientBalance;
+                           (icpBalance && !icpBalance.error && !isBalanceSufficient);
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-2xl">
@@ -342,11 +341,11 @@ export default function CreateTokenPage() {
 
               {icpBalance && icpBalance.balance && !icpBalance.error && (
                 <div className={`p-3 rounded-lg flex items-center space-x-2 ${
-                  hasSufficientBalance 
+                  isBalanceSufficient 
                     ? 'bg-green-100 border border-green-200' 
                     : 'bg-red-100 border border-red-200'
                 }`}>
-                  {hasSufficientBalance ? (
+                  {isBalanceSufficient ? (
                     <>
                       <CheckCircle className="h-5 w-5 text-green-600" />
                       <span className="text-green-800 font-medium">
@@ -645,7 +644,7 @@ export default function CreateTokenPage() {
               </p>
             )}
 
-            {isConnected && icpBalance && !icpBalance.error && !hasSufficientBalance && (
+            {isConnected && icpBalance && !icpBalance.error && !isBalanceSufficient && (
               <p className="text-center text-sm text-red-600">
                 Insufficient ICP balance. You need {tokenConfig.fees.creationFeeICP} ICP to create a token.
               </p>
