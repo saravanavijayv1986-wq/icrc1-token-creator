@@ -56,7 +56,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
           if (principalId && !principalId.isAnonymous()) {
             setPrincipal(principalId.toString());
             setDelegationIdentity(identity);
-            const idJson = localStorage.getItem('ic-identity');
+            const idJson = JSON.stringify(identity.toJSON());
             setIdentityJson(idJson);
             setIsConnected(true);
             console.log("Restored wallet connection:", principalId.toString());
@@ -131,7 +131,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       
       setPrincipal(principalText);
       setDelegationIdentity(identity);
-      const idJson = localStorage.getItem('ic-identity');
+      const idJson = JSON.stringify(identity.toJSON());
       setIdentityJson(idJson);
       setIsConnected(true);
       
