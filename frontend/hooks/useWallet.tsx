@@ -26,6 +26,17 @@ export function useWallet() {
   return context;
 }
 
+/**
+ * Serializes a DelegationIdentity to a JSON string.
+ * This is a wrapper around `identity.toJSON()` to ensure consistent serialization
+ * that can be deserialized by the backend.
+ * @param identity The DelegationIdentity to serialize.
+ * @returns A JSON string representation of the identity.
+ */
+function serializeDelegationIdentity(identity: DelegationIdentity): string {
+  return JSON.stringify(identity.toJSON());
+}
+
 export function WalletProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [principal, setPrincipal] = useState<string | null>(null);
@@ -73,7 +84,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             if (principalId && !principalId.isAnonymous()) {
               setPrincipal(principalId.toString());
               setDelegationIdentity(identity);
-              const idJson = JSON.stringify(identity.toJSON());
+              const idJson = serializeDelegationIdentity(identity);
               setIdentityJson(idJson);
               setIsConnected(true);
               console.log("Restored wallet connection:", principalId.toString());
@@ -151,7 +162,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       
       setPrincipal(principalText);
       setDelegationIdentity(identity);
-      const idJson = JSON.stringify(identity.toJSON());
+      const idJson = serializeDelegationIdentity(identity);
       setIdentityJson(idJson);
       setIsConnected(true);
       

@@ -73,6 +73,17 @@ function resolveCanisterPrincipal(canisterId: string): { principal: Principal; i
   }
 }
 
+/**
+ * Deserializes an identity from a JSON string.
+ * This function supports multiple identity formats:
+ * 1. DelegationIdentity: Serialized from the frontend `serializeDelegationIdentity`.
+ * 2. Ed25519KeyIdentity: A raw key pair.
+ * 3. Secp256k1KeyIdentity: A raw key pair.
+ *
+ * It uses type guards to determine the correct format and `fromJSON` to reconstruct.
+ * @param identityData The JSON string representing the identity.
+ * @returns A SignIdentity object.
+ */
 export function toSignIdentity(identityData: unknown): SignIdentity {
   if (typeof identityData !== 'string' || identityData.trim() === '') {
     throw new AppError(ErrorCode.INVALID_DELEGATION, "Delegation identity must be a non-empty JSON string.");
