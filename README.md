@@ -1,138 +1,185 @@
-# TokenForge - Complete ICRC-1 Token Creation Platform
+# ICRC-1 Token Deployment on ICP Mainnet
 
-A comprehensive web application for creating and managing ICRC-1 tokens on the Internet Computer blockchain.
+This guide provides a step-by-step process for deploying a production-ready ICRC-1 token on the Internet Computer mainnet using `dfx`.
 
-## Features
+## 1. Install and Setup dfx
 
-### Core Functionality
-- **Token Creation**: Deploy production-ready ICRC-1 tokens with customizable parameters
-- **Wallet Integration**: Seamless Internet Identity wallet support
-- **Token Management**: Mint, burn, and transfer tokens with full canister control
-- **Real-time Analytics**: Comprehensive dashboards for token metrics and platform statistics
-- **Health Monitoring**: Canister health monitoring with alerts and performance tracking
+First, install the DFINITY Canister SDK (`dfx`).
 
-### Technical Features
-- **Production Ready**: Full deployment pipeline with cycle wallet integration
-- **Type Safe**: End-to-end TypeScript with automatic API client generation
-- **Scalable**: Microservices architecture with proper error handling and monitoring
-- **Secure**: Rate limiting, input validation, and secure delegation handling
-- **Compliant**: Full ICRC-1 standard compliance with extensible features
+```sh
+# Install dfx
+sh -ci "$(curl -fsSL https://internetcomputer.org/install.sh)"
 
-## Architecture
+# Verify installation
+dfx --version
+```
 
-### Backend Services
-- **Token Service**: Core token CRUD operations and blockchain interactions
-- **ICP Service**: Internet Computer integration and canister management
-- **Analytics Service**: Metrics collection and reporting
-- **Monitoring Service**: Health checks and alerting
-- **Health Service**: System status and diagnostics
+Create a new workspace for your project:
 
-### Frontend
-- **React + TypeScript**: Modern React application with full type safety
-- **TanStack Query**: Efficient data fetching and caching
-- **Tailwind CSS**: Responsive design with shadcn/ui components
-- **Real-time Updates**: Live data refresh and notifications
+```sh
+mkdir icrc1-token && cd icrc1-token
+dfx new --no-frontend .
+```
 
-## Quick Start
+## 2. Switch to a Mainnet Identity
 
-### Prerequisites
-- Node.js 18+
-- Encore CLI
-- Internet Computer development environment (`dfx`)
+You need a dedicated identity for mainnet deployments.
 
-### Development Setup
+```sh
+# Create a dedicated identity (if not done before)
+dfx identity new mainnet --storage-mode=plaintext
 
-1. **Clone and Install**
-   ```bash
-   git clone <repository>
-   cd tokenforge
-   npm install
-   ```
+# Use this identity
+dfx identity use mainnet
 
-2. **Run Development Server**
-   ```bash
-   encore run
-   ```
+# Show principal (you’ll need this for the minting account)
+dfx identity get-principal
+```
 
-3. **Treasury Setup**
-   The application needs a dedicated identity to manage the cycles wallet for canister deployments. We provide an endpoint to simplify this process.
-   
-   a. **Generate Treasury Identity:**
-      Once the application is running, use a tool like `curl` or Postman to call the setup endpoint:
-      ```bash
-      curl -X POST http://localhost:4000/icp/setup/generate-treasury-identity
-      ```
-   
-   b. **Set the Secret:**
-      The command will return a JSON object containing `identityJSON`, `principal`, and `instructions`.
-      - Copy the value of `identityJSON`.
-      - In the Encore dashboard, go to the "Infrastructure" tab, find the `TreasuryDelegationIdentityJSON` secret, and paste the copied value.
-   
-   c. **Add Controller to Cycles Wallet:**
-      - Follow the `instructions` from the endpoint response to add the new `principal` as a controller to your cycles wallet. This typically involves running a `dfx` command like:
-      ```bash
-      dfx canister --network ic update-settings <your-cycles-wallet-id> --add-controller <the-new-principal>
-      ```
+## 3. Download ICRC-1 Ledger Canister
 
-4. **Configure Other Secrets**
-   Set up the remaining secrets in the Encore dashboard.
-   ```
-   ICPHost=https://ic0.app
-   DeployCyclesAmount=3000000000000
-   UserCreationFeeICP=1
-   TreasuryICPWallet=<your-treasury-principal>
-   TreasuryCyclesWallet=kwhhn-qqaaa-aaaaj-qns2q-cai
-   # TreasuryDelegationIdentityJSON is set in the previous step
-   ICPLedgerCanisterId=ryjl3-tyaaa-aaaaa-aaaba-cai
-   ICRCWasmModuleUrl=https://github.com/dfinity/ICRC-1/releases/download/v0.1.0/icrc1_ledger.wasm
-   ```
+Create a folder for canister artifacts:
 
-5. **Access Application**
-   - Backend API: http://localhost:4000
-   - Frontend: http://localhost:5173
+```sh
+mkdir -p canisters/icrc1_ledger
+```
 
-### Production Deployment
+Download the latest ICRC-1 ledger WASM module and Candid file:
 
-1. **Deploy Backend**
-   ```bash
-   encore deploy
-   ```
+```sh
+curl -L -o canisters/icrc1_ledger/icrc1_ledger.wasm \
+  https://download.dfinity.systems/ic/crypto/icrc1_ledger/latest/icrc1_ledger.wasm
 
-2. **Configure Production Secrets**
-   - Set all required secrets in production environment
-   - Configure treasury wallet with proper controllers
-   - Verify cycles wallet setup
+curl -L -o canisters/icrc1_ledger/icrc1_ledger.did \
+  https://download.dfinity.systems/ic/crypto/icrc1_ledger/latest/icrc1_ledger.did
+```
 
-3. **Frontend Deployment**
-   - Build frontend: `npm run build`
-   - Deploy to your preferred hosting platform
-   - Configure production API endpoints
+## 4. Update dfx.json
 
-## Configuration
+Add the ledger canister configuration to your `dfx.json` file. Ensure you also have network configurations for `local` and `ic`.
 
-### Required Secrets
+```json
+{
+  "canisters": {
+    "icrc1_ledger": {
+      "type": "custom",
+      "wasm": "canisters/icrc1_ledger/icrc1_ledger.wasm",
+      "candid": "canisters/icrc1_ledger/icrc1_ledger.did"
+    }
+  },
+  "networks": {
+    "local": { "bind": "127.0.0.1:4943", "type": "ephemeral" },
+    "ic": { "providers": ["https://ic0.app"] }
+  }
+}
+```
 
-| Secret | Description | Example |
-|--------|-------------|---------|
-| `ICPHost` | Internet Computer API endpoint | `https://ic0.app` |
-| `DeployCyclesAmount` | Cycles for token canister deployment | `3000000000000` |
-| `UserCreationFeeICP` | Fee in ICP for token creation | `1` |
-| `TreasuryICPWallet` | The principal ID for the treasury where token creation fees (in ICP) are collected. This must be a standard principal ID (e.g., `rrkah-...`), not a 64-character hex account ID. The application will transfer ICP to the default account of this principal. | `rrkah-...` |
-| `TreasuryCyclesWallet` | Cycles wallet canister ID | `kwhhn-qqaaa-aaaaj-qns2q-cai` |
-| `TreasuryDelegationIdentityJSON` | JSON for the treasury identity that controls the cycles wallet. | See "Treasury Setup" section. |
+## 5. Create Init Args Template
 
-### Optional Configuration
+Create a file named `icrc1_init.args` to specify your token's initial parameters.
 
-| Secret | Description | Default |
-|--------|-------------|---------|
-| `ICPLedgerCanisterId` | ICP Ledger canister override | `ryjl3-tyaaa-aaaaa-aaaba-cai` |
-| `ICRCWasmModuleUrl` | ICRC-1 WASM module URL | GitHub release URL |
-| `ICRCWasmSHA256` | WASM module checksum | (optional) |
-| `SkipUserFeeDuringDev` | Skip fee collection in development | `false` |
+```candid
+(
+  record {
+    token_symbol = "<SYMBOL>";
+    token_name   = "<NAME>";
+    minting_account = record { owner = principal "<OWNER_PRINCIPAL>"; };
+    transfer_fee = <FEE> : nat;
+    metadata = vec {
+      record { "icrc1:symbol";   variant { Text = "<SYMBOL>" } };
+      record { "icrc1:name";     variant { Text = "<NAME>" } };
+      record { "icrc1:decimals"; variant { Nat = <DECIMALS> } };
+      record { "icrc1:fee";      variant { Nat = <FEE> } };
+    };
+    initial_balances = vec {
+      record {
+        record { owner = principal "<OWNER_PRINCIPAL>"; };
+        <INITIAL_SUPPLY> : nat
+      }
+    };
+    feature_flags = opt record { icrc2 = true };
+    archive_options = record {
+      num_blocks_to_archive = 2000;
+      trigger_threshold = 4000;
+      cycles_for_archive_creation = opt 1_000_000_000_000;
+      node_max_memory_size_bytes = opt 3_221_225_472;
+      controller_id = principal "<OWNER_PRINCIPAL>";
+    };
+  }
+)
+```
 
-## API Documentation
+**Replace placeholders:**
 
-### Token Endpoints
-- `POST /tokens` - Create new token
-- `GET /tokens` - List tokens
-- `GET /tokens
+-   `<SYMBOL>`: Your token's ticker (e.g., "SOLF").
+-   `<NAME>`: Your token's full name (e.g., "SolForge").
+-   `<OWNER_PRINCIPAL>`: The principal of your treasury or minting account.
+-   `<FEE>`: The transaction fee in the token's smallest units (e.g., `10000`).
+-   `<DECIMALS>`: The number of decimal places (e.g., `8`).
+-   `<INITIAL_SUPPLY>`: The starting supply in the token's smallest units.
+
+## 6. Create and Fund Canister
+
+First, create the canister on the IC network. This reserves a canister ID for you.
+
+```sh
+dfx canister create icrc1_ledger --network ic
+```
+
+Next, add cycles to your canister to pay for computation and storage. You must first convert ICP to cycles in the NNS frontend.
+
+```sh
+dfx canister deposit-cycles 3_000_000_000_000 icrc1_ledger --network ic
+```
+
+## 7. Deploy Ledger
+
+Deploy the canister with your initialization arguments.
+
+```sh
+dfx deploy icrc1_ledger --network ic --argument-file icrc1_init.args
+```
+
+Get your new canister ID:
+
+```sh
+LEDGER_ID=$(dfx canister id icrc1_ledger --network ic)
+echo "Ledger deployed at: $LEDGER_ID"
+```
+
+## 8. Verify Metadata & Balance
+
+Check that your token was deployed correctly.
+
+```sh
+# Verify metadata
+dfx canister call --network ic $LEDGER_ID icrc1_metadata '()'
+
+# Verify balance
+ME=$(dfx identity get-principal)
+dfx canister call --network ic $LEDGER_ID icrc1_balance_of "(record { owner = principal \"$ME\" })"
+```
+
+## 9. Transfer Example
+
+Here's how to transfer tokens to another principal:
+
+```sh
+RECIP="aaaaa-aa"   # recipient principal
+dfx canister call --network ic $LEDGER_ID icrc1_transfer \
+"(record { to = record { owner = principal \"$RECIP\" }; amount = 1000000:nat })"
+```
+
+---
+
+## ✅ Summary
+
+1.  Install & configure `dfx`.
+2.  Create/use a mainnet identity.
+3.  Download ICRC-1 ledger wasm + candid.
+4.  Add ledger canister in `dfx.json`.
+5.  Create `icrc1_init.args` with your token config.
+6.  Create + fund canister with cycles.
+7.  Deploy to ICP mainnet.
+8.  Verify token metadata & balances.
+9.  Use `icrc1_transfer` for transactions.
