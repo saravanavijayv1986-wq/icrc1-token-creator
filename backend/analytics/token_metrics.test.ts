@@ -71,10 +71,9 @@ describe("Analytics Token Metrics", () => {
   });
 
   test("should handle invalid token ID", async () => {
-    const result = await getTokenMetrics({ tokenId: 99999, days: 30 });
-    
-    // Should throw an error for non-existent token
-    expect(result).toBeUndefined();
+    // getTokenMetrics throws an AppError which is converted to an APIError by handleError
+    // The test should assert that the promise rejects.
+    await expect(getTokenMetrics({ tokenId: 99999, days: 30 })).rejects.toThrow("Token not found");
   });
 
   test("should get platform stats", async () => {

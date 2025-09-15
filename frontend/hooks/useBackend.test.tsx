@@ -331,7 +331,7 @@ describe("useBackend Hook", () => {
     const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
 
     expect(balanceResult.balance).toBe("0");
-    expect(balanceResult.error).toContain("auth_error"); // Changed to code
+    expect(balanceResult.error).toBe("auth_error");
     expect(mockBackendWithAuth.icp.getBalance).toHaveBeenCalledTimes(1); // No retry for auth errors
   });
 
@@ -344,7 +344,7 @@ describe("useBackend Hook", () => {
     const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
 
     expect(balanceResult.balance).toBe("0");
-    expect(balanceResult.error).toContain("invalid_response"); // Changed to code
+    expect(balanceResult.error).toBe("invalid_response");
   });
 
   test("should get ICP balance with error handling", async () => {
@@ -356,7 +356,7 @@ describe("useBackend Hook", () => {
 
     expect(balanceResult).toEqual({ 
       balance: "0", 
-      error: "network_unavailable" // Changed to code
+      error: "network_unavailable"
     });
   });
 
@@ -407,36 +407,32 @@ describe("useBackend Hook", () => {
     }
   });
 
-  test("should handle rate limiting errors appropriately", async () => {
-    mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error("Rate limit exceeded"));
-
-    const { result } = renderHook(() => useBackend());
-
-    const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
-
-    expect(balanceResult.balance).toBe("0");
-    expect(balanceResult.error).toContain("rate_limit"); // Changed to code
-  });
-
   test("should classify various error types correctly", async () => {
     const { result } = renderHook(() => useBackend());
 
     const errorTestCases = [
-      { error: "Network connection failed", expectedMessage: "network_error" },
-      { error: "Request timeout", expectedMessage: "timeout" },
-      { error: "Unauthorized access", expectedMessage: "auth_error" },
-      { error: "Canister not found", expectedMessage: "network_unavailable" },
-      { error: "Invalid principal format", expectedMessage: "invalid_principal" },
-      { error: "Service unavailable", expectedMessage: "service_unavailable" },
+      { backendCode: 'invalid_argument', expectedCode: 'invalid_principal' },
+      { backendCode: 'resource_exhausted', expectedCode: 'rate_limit' },
+      { backendCode: 'unavailable', expectedCode: 'network_unavailable' },
+      { backendCode: 'internal', expectedCode: 'service_unavailable' },
+      { backendCode: 'unauthenticated', expectedCode: 'auth_error' },
+      { backendCode: 'some_other_code', expectedCode: 'unknown_error' },
     ];
 
     for (const testCase of errorTestCases) {
-      mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error(testCase.error));
+      mockBackendWithAuth.icp.getBalance.mockRejectedValue({
+        response: { data: { code: testCase.backendCode } }
+      });
       
       const balanceResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
       
       expect(balanceResult.balance).toBe("0");
-      expect(balanceResult.error).toContain(testCase.expectedMessage);
+      expect(balanceResult.error).toBe(testCase.expectedCode);
     }
+
+    // Test network error without a code
+    mockBackendWithAuth.icp.getBalance.mockRejectedValue(new Error("Network connection failed"));
+    const networkResult = await result.current.getICPBalance("rrkah-fqaaa-aaaah-qcuea-cai");
+    expect(networkResult.error).toBe('network_error');
   });
 });

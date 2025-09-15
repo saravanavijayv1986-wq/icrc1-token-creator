@@ -107,7 +107,7 @@ export function withErrorHandling<T extends any[], R>(
 export async function withRetry<T>(
   operation: () => Promise<T>,
   maxRetries: number = 3,
-  delay: number = 1000
+  baseDelay: number = 1000
 ): Promise<T> {
   let lastError: Error;
 
@@ -118,11 +118,12 @@ export async function withRetry<T>(
       lastError = error instanceof Error ? error : new Error(String(error));
       
       // Don't retry certain types of errors
-      if (lastError.message.includes('authentication') ||
-          lastError.message.includes('delegation') ||
-          lastError.message.includes('unauthorized') ||
-          lastError.message.includes('invalid principal') ||
-          lastError.message.includes('permission denied')) {
+      const message = lastError.message.toLowerCase();
+      if (message.includes('authentication') ||
+          message.includes('delegation') ||
+          message.includes('unauthorized') ||
+          message.includes('invalid principal') ||
+          message.includes('permission denied')) {
         break;
       }
       
@@ -130,7 +131,8 @@ export async function withRetry<T>(
         break;
       }
 
-      await new Promise(resolve => setTimeout(resolve, delay * Math.pow(2, attempt - 1)));
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 

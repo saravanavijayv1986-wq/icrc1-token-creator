@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { useWallet } from "./useWallet";
 import backend from "~backend/client";
 import { Principal } from "@dfinity/principal";
+import { withRetry } from "../utils/errorHandling";
 
 function icpToE8s(amount: string | number): bigint {
   const str = String(amount).trim();
@@ -11,39 +12,6 @@ function icpToE8s(amount: string | number): bigint {
   const [intPart, fracPart = ""] = str.split(".");
   const fracPadded = (fracPart + "00000000").slice(0, 8);
   return BigInt(intPart) * 100000000n + BigInt(fracPadded);
-}
-
-async function withRetry<T>(
-  operation: () => Promise<T>,
-  maxRetries: number = 3,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error;
-
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      
-      // Don't retry on certain errors
-      if (lastError.message.includes('authentication') || 
-          lastError.message.includes('unauthorized') ||
-          lastError.message.includes('invalid principal') ||
-          lastError.message.includes('delegation')) {
-        break;
-      }
-
-      if (attempt === maxRetries) {
-        break;
-      }
-
-      const delay = baseDelay * Math.pow(2, attempt - 1);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError!;
 }
 
 export function useBackend() {
@@ -183,63 +151,41 @@ export function useBackend() {
     targetPrincipal: string
   ) => {
     if (!targetPrincipal) {
-      return {
-        balance: "0",
-        error: "principal_required"
-      };
+      return { balance: "0", error: "principal_required" };
     }
-    
     try {
       Principal.fromText(targetPrincipal);
     } catch (e) {
-      return {
-        balance: "0",
-        error: "invalid_principal"
-      };
+      return { balance: "0", error: "invalid_principal" };
     }
 
     try {
-      const result = await withRetry(async () => {
-        return await backend.icp.getBalance({ 
-          canisterId: "dummy",
-          principal: targetPrincipal
-        });
-      }, 2, 1000);
-      
+      const result = await withRetry(() => backend.icp.getBalance({ canisterId: "dummy", principal: targetPrincipal }), 2, 1000);
       if (!result || typeof result.balance === 'undefined') {
-        return {
-          balance: "0",
-          error: "invalid_response"
-        };
+        return { balance: "0", error: "invalid_response" };
       }
-
-      return {
-        balance: result.balance.toString(),
-        error: result.error
-      };
-      
-    } catch (error) {
+      return { balance: result.balance.toString(), error: result.error };
+    } catch (error: any) {
       console.error("Failed to fetch ICP balance:", error);
-      
-      const errorMessage = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-      
-      if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
-        return { balance: "0", error: "network_error" };
-      } else if (errorMessage.includes('timeout')) {
-        return { balance: "0", error: "timeout" };
-      } else if (errorMessage.includes('unauthorized') || errorMessage.includes('auth')) {
-        return { balance: "0", error: "auth_error" };
-      } else if (errorMessage.includes('rate limit')) {
-        return { balance: "0", error: "rate_limit" };
-      } else if (errorMessage.includes('canister') || errorMessage.includes('replica')) {
-        return { balance: "0", error: "network_unavailable" };
-      } else if (errorMessage.includes('principal') || errorMessage.includes('invalid')) {
-        return { balance: "0", error: "invalid_principal" };
-      } else if (errorMessage.includes('service') || errorMessage.includes('unavailable')) {
-        return { balance: "0", error: "service_unavailable" };
-      } else {
-        return { balance: "0", error: "unknown_error" };
+      const code = error?.response?.data?.code;
+      let friendlyCode: string;
+      switch (code) {
+        case 'invalid_argument': friendlyCode = 'invalid_principal'; break;
+        case 'resource_exhausted': friendlyCode = 'rate_limit'; break;
+        case 'unavailable': friendlyCode = 'network_unavailable'; break;
+        case 'internal': friendlyCode = 'service_unavailable'; break;
+        case 'unauthenticated': friendlyCode = 'auth_error'; break;
+        default: friendlyCode = 'unknown_error';
       }
+      const errorMessage = error instanceof Error ? error.message.toLowerCase() : '';
+      if (!code) { // If no code, fallback to message parsing for network errors
+        if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
+          friendlyCode = 'network_error';
+        } else if (errorMessage.includes('timeout')) {
+          friendlyCode = 'timeout';
+        }
+      }
+      return { balance: "0", error: friendlyCode };
     }
   }, []);
 
