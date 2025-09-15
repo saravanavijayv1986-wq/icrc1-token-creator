@@ -1,3 +1,4 @@
+    
 // Environment-specific configuration (Vite)
 // Use import.meta.env.MODE for build-time mode detection.
 const mode = import.meta.env.MODE;
@@ -31,8 +32,10 @@ export const walletConfig = {
     // Identity provider canister ID
     canisterId: "rdmx6-jaaaa-aaaah-qca7q-cai", // Internet Identity canister
     
-    // Derivation origin for non-production environments to ensure consistent principals.
-    derivationOrigin: isDevelopment ? window.location.origin : undefined,
+    // Derivation origin to ensure consistent principals across different environments.
+    // Using window.location.origin provides a stable identity per environment (e.g., localhost, staging, production)
+    // and is required for multi-device session consistency.
+    derivationOrigin: window.location.origin,
   },
 };
 
