@@ -42,3 +42,16 @@ This project is designed to be run within the Leap development environment.
 3.  **Manage**: Use the dashboard to manage your newly created token.
 
 The platform handles canister deployment, cycle management (via a pre-configured treasury), and all on-chain interactions, providing a seamless user experience.
+
+## Production Notes
+
+Use ICRC_WASM_URL from dfinity/ic → ledger-suite-icrc-YYYY-MM-DD → ic-icrc1-ledger.wasm.gz, and verify ICRC_WASM_SHA256.
+
+ICP ledger canister id: ryjl3-tyaaa-aaaaa-aaaba-cai.
+
+Ensure treasury principal is a controller of your cycles wallet; load TREASURY_DELEGATION_IDENTITY_JSON in prod.
+
+Always read balances via the new token’s ledger canister id with an ICRC account (owner + optional subaccount).
+
+If you need transaction history, deploy the ICRC index canister matching the same ledger-suite version.
+
