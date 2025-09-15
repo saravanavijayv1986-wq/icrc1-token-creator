@@ -266,6 +266,11 @@ export default function DashboardPage() {
                               View Details
                             </Link>
                           </Button>
+                          {token.canisterId && (
+                            <Button variant="outline" size="sm" asChild>
+                              <Link to={`/tokens/${token.id}#transfer`}>Transfer</Link>
+                            </Button>
+                          )}
                         </div>
                       </div>
                     </div>
