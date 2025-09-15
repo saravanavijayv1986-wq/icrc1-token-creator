@@ -134,22 +134,23 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
 
         const decimals = req.decimals ?? 8;
         const creatorPrincipal = req.creatorPrincipal;
+        const symbol = req.symbol.trim().toUpperCase();
 
         logger.info("Input validation passed", {
           operationType: OperationType.TOKEN_CREATION,
           operationId,
-          metadata: { decimals, symbol: req.symbol }
+          metadata: { decimals, symbol }
         });
 
         // Check for duplicate symbol
         const existingToken = await tokenDB.queryRow`
-          SELECT id FROM tokens WHERE UPPER(symbol) = UPPER(${req.symbol})
+          SELECT id FROM tokens WHERE symbol = ${symbol}
         `;
         
         if (existingToken) {
           throw createAppError(
             ErrorCode.VALIDATION_ERROR,
-            `Token with symbol ${req.symbol} already exists`,
+            `Token with symbol '${symbol}' already exists`,
             { symbol: req.symbol },
             OperationType.TOKEN_CREATION,
             operationId
@@ -159,7 +160,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         logger.info("Symbol uniqueness verified", {
           operationType: OperationType.TOKEN_CREATION,
           operationId,
-          metadata: { symbol: req.symbol }
+          metadata: { symbol }
         });
 
         // Validate delegation identity
@@ -213,7 +214,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             // Basic checksum for caching validation
             const sha256 = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
 
-            const fileName = `token-logos/${req.symbol.toLowerCase()}-${Date.now()}-${sha256}.png`;
+            const fileName = `token-logos/${symbol.toLowerCase()}-${Date.now()}-${sha256}.png`;
             await storage.upload(fileName, buffer, {
               contentType
             });
@@ -251,7 +252,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         logger.info("Creating token database record", {
           operationType: OperationType.TOKEN_CREATION,
           operationId,
-          metadata: { symbol: req.symbol, hasLogo: !!logoUrl }
+          metadata: { symbol, hasLogo: !!logoUrl }
         });
 
         const tokenRow = await tokenDB.queryRow<{ id: number }>`
@@ -260,7 +261,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             creator_principal, is_mintable, is_burnable, status, created_at
           ) VALUES (
             ${req.tokenName.trim()}, 
-            ${req.symbol.trim().toUpperCase()}, 
+            ${symbol}, 
             ${req.totalSupply}, 
             ${decimals}, 
             ${logoUrl},
@@ -287,14 +288,14 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           operationType: OperationType.TOKEN_CREATION,
           operationId,
           tokenId: tokenRow.id,
-          metadata: { symbol: req.symbol }
+          metadata: { symbol }
         });
 
         addBreadcrumb(
           "Token record created in database",
           "database",
           "info",
-          { tokenId: tokenRow.id, symbol: req.symbol }
+          { tokenId: tokenRow.id, symbol }
         );
 
         try {
@@ -303,12 +304,12 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             operationType: OperationType.CANISTER_DEPLOY,
             operationId,
             tokenId: tokenRow.id,
-            metadata: { symbol: req.symbol }
+            metadata: { symbol }
           });
 
           const deployResult = await icp.deploy({
             tokenName: req.tokenName.trim(),
-            symbol: req.symbol.trim().toUpperCase(),
+            symbol: symbol,
             totalSupply: req.totalSupply,
             decimals,
             logoUrl: logoUrl ?? undefined,
@@ -324,7 +325,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             tokenId: tokenRow.id,
             canisterId: deployResult.canisterId,
             metadata: {
-              symbol: req.symbol,
+              symbol: symbol,
               cyclesUsed: deployResult.cyclesUsed,
               status: deployResult.status
             }
@@ -416,7 +417,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             {
               tokenId: tokenRow.id,
               canisterId: deployResult.canisterId,
-              symbol: req.symbol
+              symbol: symbol
             }
           );
 
@@ -427,7 +428,7 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             {
               tokenId: tokenRow.id,
               canisterId: deployResult.canisterId,
-              symbol: req.symbol
+              symbol: symbol
             }
           );
 
