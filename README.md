@@ -117,7 +117,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
 | `ICPHost` | Internet Computer API endpoint | `https://ic0.app` |
 | `DeployCyclesAmount` | Cycles for token canister deployment | `3000000000000` |
 | `UserCreationFeeICP` | Fee in ICP for token creation | `1` |
-| `TreasuryICPWallet` | Treasury wallet principal for fee collection | `rrkah-...` |
+| `TreasuryICPWallet` | The principal ID of the wallet for fee collection. This should be a standard principal, not a hex account ID. | `rrkah-...` |
 | `TreasuryCyclesWallet` | Cycles wallet canister ID | `kwhhn-qqaaa-aaaaj-qns2q-cai` |
 | `TreasuryDelegationIdentityJSON` | JSON for the treasury identity that controls the cycles wallet. | See "Treasury Setup" section. |
 
