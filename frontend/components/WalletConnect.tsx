@@ -19,14 +19,6 @@ const wallets = [
     features: ["Secure delegation", "No seed phrases", "Biometric login"],
     recommended: true,
   },
-  {
-    id: "nfid",
-    name: "NFID",
-    description: "Alternative Internet Identity provider with enhanced features",
-    icon: "🔐",
-    features: ["Enhanced security", "Multi-device sync", "Social recovery"],
-    recommended: false,
-  },
 ];
 
 function truncatePrincipal(p: string, head: number = 8, tail: number = 3) {

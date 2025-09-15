@@ -12,6 +12,7 @@ import { addBreadcrumb, setTag } from "../common/sentry";
 import log from "encore.dev/log";
 import crypto from "node:crypto";
 import { z } from "zod";
+import { Principal } from "@dfinity/principal";
 
 export interface CreateTokenRequest {
   tokenName: string;
@@ -50,8 +51,15 @@ const createSchema = z.object({
   logoFile: z.string().base64().optional(),
   isMintable: z.boolean().optional(),
   isBurnable: z.boolean().optional(),
-  creatorPrincipal: z.string().min(1),
-  delegationIdentity: z.any(),
+  creatorPrincipal: z.string().refine((p) => {
+    try {
+      Principal.fromText(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }, { message: "Invalid creator principal format" }),
+  delegationIdentity: z.any().refine(val => val, { message: "Delegation identity is required" }),
 });
 
 // Creates a new ICRC-1 token and deploys it to the IC.
@@ -76,12 +84,10 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         }
       );
 
-      // Set Sentry tags for this operation
       setTag("operation_type", "token_creation");
       setTag("token_symbol", req.symbol);
 
       try {
-        // Add breadcrumb for token creation start
         addBreadcrumb(
           "Token creation started",
           "token",
@@ -93,7 +99,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           }
         );
 
-        // Rate limiting (SQL-backed)
         await tokenCreationLimiter.checkLimit(req.creatorPrincipal);
         
         logger.info("Rate limit check passed", {
@@ -102,31 +107,12 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           metadata: { principal: req.creatorPrincipal }
         });
 
-        // Input validation (zod + custom principal check)
         const parsed = createSchema.safeParse(req);
         if (!parsed.success) {
           throw createAppError(
             ErrorCode.VALIDATION_ERROR,
             "Invalid input parameters",
-            { errors: parsed.error.errors.map(e => e.message) },
-            OperationType.TOKEN_CREATION,
-            operationId
-          );
-        }
-
-        const validator = validate()
-          .required(req.creatorPrincipal, "creatorPrincipal")
-          .principal(req.creatorPrincipal, "creatorPrincipal");
-
-        if (req.decimals !== undefined) {
-          validator.number(req.decimals, "decimals", { min: 0, max: 18, integer: true });
-        }
-
-        if (!validator.isValid()) {
-          throw createAppError(
-            ErrorCode.VALIDATION_ERROR,
-            "Invalid input parameters",
-            { errors: validator.getErrors() },
+            { errors: parsed.error.flatten().fieldErrors },
             OperationType.TOKEN_CREATION,
             operationId
           );
@@ -142,7 +128,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           metadata: { decimals, symbol }
         });
 
-        // Check for duplicate symbol
         const existingToken = await tokenDB.queryRow`
           SELECT id FROM tokens WHERE symbol = ${symbol}
         `;
@@ -163,20 +148,8 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           metadata: { symbol }
         });
 
-        // Validate delegation identity
-        if (!req.delegationIdentity) {
-          throw createAppError(
-            ErrorCode.INVALID_DELEGATION,
-            "Valid delegation identity is required for ICP deployment",
-            undefined,
-            OperationType.TOKEN_CREATION,
-            operationId
-          );
-        }
-
         let logoUrl: string | null = null;
 
-        // Upload logo if provided
         if (req.logoFile) {
           try {
             logger.info("Processing logo upload", {
@@ -185,10 +158,8 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
               metadata: { hasLogo: true }
             });
 
-            // strict base64 validation already in zod; decode
             const buffer = Buffer.from(req.logoFile, "base64");
 
-            // Validate file size (max 2MB)
             if (buffer.length > 2 * 1024 * 1024) {
               throw createAppError(
                 ErrorCode.VALIDATION_ERROR,
@@ -199,7 +170,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
               );
             }
 
-            // Sniff type and restrict
             const contentType = detectImageType(buffer);
             if (contentType === "unknown") {
               throw createAppError(
@@ -211,7 +181,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
               );
             }
 
-            // Basic checksum for caching validation
             const sha256 = crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
 
             const fileName = `token-logos/${symbol.toLowerCase()}-${Date.now()}-${sha256}.png`;
@@ -248,7 +217,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
           }
         }
 
-        // Create token record with transaction
         logger.info("Creating token database record", {
           operationType: OperationType.TOKEN_CREATION,
           operationId,
@@ -299,7 +267,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
         );
 
         try {
-          // Deploy canister using the ICP service with real delegation
           logger.info("Starting canister deployment", {
             operationType: OperationType.CANISTER_DEPLOY,
             operationId,
@@ -342,7 +309,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             }
           );
 
-          // Update token with canister ID
           await tokenDB.exec`
             UPDATE tokens 
             SET 
@@ -359,7 +325,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             canisterId: deployResult.canisterId
           });
 
-          // Initialize monitoring for the new canister
           await initializeMonitoring(tokenRow.id, deployResult.canisterId);
 
           logger.info("Monitoring initialized", {
@@ -369,7 +334,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             canisterId: deployResult.canisterId
           });
 
-          // Log creation transaction with structured metadata
           const transactionId = deployResult.deploymentHash;
           const metadata = {
             cyclesUsed: deployResult.cyclesUsed,
@@ -405,7 +369,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             metadata: { transactionId }
           });
 
-          // Record metrics
           metrics.increment("token.created");
 
           logger.completeOperation(
@@ -441,7 +404,6 @@ export const create = api<CreateTokenRequest, CreateTokenResponse>(
             cyclesUsed: deployResult.cyclesUsed,
           };
         } catch (error) {
-          // Update token status to failed
           await tokenDB.exec`
             UPDATE tokens 
             SET status = 'failed', updated_at = NOW(), failure_reason = ${error instanceof Error ? error.message : 'Unknown error'}
@@ -514,13 +476,11 @@ export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
       );
 
       try {
-        // Input validation
         validate()
           .required(req.tokenId, "tokenId")
           .number(req.tokenId, "tokenId", { min: 1, integer: true })
           .throwIfInvalid();
 
-        // Get token from database
         const token = await tokenDB.queryRow<{
           id: number;
           canister_id: string;
@@ -570,7 +530,6 @@ export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
           metadata: { symbol: token.symbol }
         });
 
-        // Get current token info from the canister
         const tokenInfo = await icp.getTokenInfo({ canisterId: token.canister_id });
 
         logger.info("Retrieved token info from canister", {
@@ -584,7 +543,6 @@ export const syncWithCanister = api<SyncTokenRequest, SyncTokenResponse>(
           }
         });
 
-        // Update database with canister data
         await tokenDB.exec`
           UPDATE tokens 
           SET 

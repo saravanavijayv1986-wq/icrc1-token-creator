@@ -13,7 +13,7 @@ export const walletConfig = {
     : "https://identity.ic0.app", // Use production II even in dev for real tokens
   
   // Supported wallet types
-  supportedWallets: ["internet-identity", "nfid"],
+  supportedWallets: ["internet-identity"],
   
   // Default network
   network: isProduction ? "mainnet" : "local",

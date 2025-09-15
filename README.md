@@ -6,7 +6,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
 
 ### Core Functionality
 - **Token Creation**: Deploy production-ready ICRC-1 tokens with customizable parameters
-- **Wallet Integration**: Seamless Internet Identity and NFID wallet support
+- **Wallet Integration**: Seamless Internet Identity wallet support
 - **Token Management**: Mint, burn, and transfer tokens with full canister control
 - **Real-time Analytics**: Comprehensive dashboards for token metrics and platform statistics
 - **Health Monitoring**: Canister health monitoring with alerts and performance tracking
@@ -117,7 +117,7 @@ A comprehensive web application for creating and managing ICRC-1 tokens on the I
 | `ICPHost` | Internet Computer API endpoint | `https://ic0.app` |
 | `DeployCyclesAmount` | Cycles for token canister deployment | `3000000000000` |
 | `UserCreationFeeICP` | Fee in ICP for token creation | `1` |
-| `TreasuryICPWallet` | The principal ID of the wallet for fee collection. This should be a standard principal, not a hex account ID. | `rrkah-...` |
+| `TreasuryICPWallet` | The principal ID for the treasury where token creation fees (in ICP) are collected. This must be a standard principal ID (e.g., `rrkah-...`), not a 64-character hex account ID. The application will transfer ICP to the default account of this principal. | `rrkah-...` |
 | `TreasuryCyclesWallet` | Cycles wallet canister ID | `kwhhn-qqaaa-aaaaj-qns2q-cai` |
 | `TreasuryDelegationIdentityJSON` | JSON for the treasury identity that controls the cycles wallet. | See "Treasury Setup" section. |
 

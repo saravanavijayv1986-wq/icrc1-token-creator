@@ -24,6 +24,7 @@ import {
   Ed25519KeyIdentity,
   type SignIdentity,
 } from "@dfinity/identity";
+import { z } from "zod";
 
 const icpHost = secret("ICPHost");
 const deployCyclesAmount = secret("DeployCyclesAmount");
@@ -530,6 +531,25 @@ export interface DeployCanisterResponse {
   feePaidICP: string;
 }
 
+const deployCanisterSchema = z.object({
+  tokenName: z.string().min(2).max(50),
+  symbol: z.string().regex(/^[A-Z0-9]+$/).min(2).max(10),
+  totalSupply: z.number().int().positive().max(1e15),
+  decimals: z.number().int().min(0).max(18),
+  logoUrl: z.string().url().optional(),
+  isMintable: z.boolean(),
+  isBurnable: z.boolean(),
+  delegationIdentity: z.any().refine(val => val, { message: "Delegation identity is required" }),
+  ownerPrincipal: z.string().refine((p) => {
+    try {
+      Principal.fromText(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }, { message: "Invalid owner principal format" }),
+});
+
 export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
   { expose: true, method: "POST", path: "/icp/deploy" },
   withOperationLogging(
@@ -551,12 +571,10 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
         }
       );
 
-      // Set Sentry tags for this operation
       setTag("operation_type", "canister_deploy");
       setTag("token_symbol", req.symbol);
 
       try {
-        // Add breadcrumb for deployment start
         addBreadcrumb(
           "Canister deployment started",
           "blockchain",
@@ -568,35 +586,12 @@ export const deploy = api<DeployCanisterRequest, DeployCanisterResponse>(
           }
         );
 
-        const validator = validate()
-          .required(req.tokenName, "tokenName")
-          .string(req.tokenName, "tokenName", { minLength: 2, maxLength: 50 })
-          .required(req.symbol, "symbol")
-          .string(req.symbol, "symbol", { minLength: 2, maxLength: 10 })
-          .required(req.totalSupply, "totalSupply")
-          .number(req.totalSupply, "totalSupply", { min: 1, max: 1e15, integer: true })
-          .required(req.decimals, "decimals")
-          .number(req.decimals, "decimals", { min: 0, max: 18, integer: true })
-          .required(req.ownerPrincipal, "ownerPrincipal")
-          .principal(req.ownerPrincipal, "ownerPrincipal")
-          .boolean(req.isMintable, "isMintable")
-          .boolean(req.isBurnable, "isBurnable");
-
-        if (!validator.isValid()) {
+        const parsed = deployCanisterSchema.safeParse(req);
+        if (!parsed.success) {
           throw createAppError(
             ErrorCode.VALIDATION_ERROR,
             "Invalid deployment parameters",
-            { errors: validator.getErrors() },
-            OperationType.CANISTER_DEPLOY,
-            operationId
-          );
-        }
-
-        if (!req.delegationIdentity) {
-          throw createAppError(
-            ErrorCode.INVALID_DELEGATION,
-            "Valid delegation identity is required",
-            undefined,
+            { errors: parsed.error.flatten().fieldErrors },
             OperationType.CANISTER_DEPLOY,
             operationId
           );
@@ -942,6 +937,37 @@ export interface TokenOperationResponse {
   blockIndex?: string;
 }
 
+const tokenOperationSchema = z.object({
+  canisterId: z.string(),
+  operation: z.enum(["mint", "burn", "transfer"]),
+  amount: z.string().refine((amt) => {
+    try {
+      return BigInt(amt) > 0n;
+    } catch {
+      return false;
+    }
+  }, { message: "Amount must be a positive integer string" }),
+  recipient: z.string().refine((p) => {
+    try {
+      Principal.fromText(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }, { message: "Invalid recipient principal format" }).optional(),
+  delegationIdentity: z.any().refine(val => val, { message: "Delegation identity is required" }),
+  ownerPrincipal: z.string().refine((p) => {
+    try {
+      Principal.fromText(p);
+      return true;
+    } catch {
+      return false;
+    }
+  }, { message: "Invalid owner principal format" }),
+}).refine(data => {
+  return !(data.operation === "mint" || data.operation === "transfer") || !!data.recipient;
+}, { message: "Recipient is required for mint and transfer operations" });
+
 export const performTokenOperation = api<TokenOperationRequest, TokenOperationResponse>(
   { expose: true, method: "POST", path: "/icp/operation" },
   withOperationLogging(
@@ -961,12 +987,10 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
         }
       );
 
-      // Set Sentry tags for this operation
       setTag("operation_type", `token_${req.operation}`);
       setTag("canister_id", req.canisterId);
 
       try {
-        // Add breadcrumb for operation start
         addBreadcrumb(
           `Token ${req.operation} operation started`,
           "blockchain",
@@ -979,47 +1003,12 @@ export const performTokenOperation = api<TokenOperationRequest, TokenOperationRe
           }
         );
 
-        const validator = validate()
-          .required(req.canisterId, "canisterId")
-          .required(req.operation, "operation")
-          .custom(req.operation, {
-            validate: (op) => ["mint", "burn", "transfer"].includes(op),
-            message: "Invalid operation type",
-          })
-          .required(req.amount, "amount")
-          .custom(req.amount, {
-            validate: (amt) => {
-              try {
-                const num = BigInt(amt);
-                return num > 0n;
-              } catch {
-                return false;
-              }
-            },
-            message: "Amount must be a positive integer",
-          })
-          .required(req.ownerPrincipal, "ownerPrincipal")
-          .principal(req.ownerPrincipal, "ownerPrincipal");
-
-        if (req.operation === "mint" || req.operation === "transfer") {
-          validator.required(req.recipient, "recipient").principal(req.recipient!, "recipient");
-        }
-
-        if (!validator.isValid()) {
+        const parsed = tokenOperationSchema.safeParse(req);
+        if (!parsed.success) {
           throw createAppError(
             ErrorCode.VALIDATION_ERROR,
             "Invalid operation parameters",
-            { errors: validator.getErrors() },
-            OperationType.TOKEN_TRANSFER,
-            operationId
-          );
-        }
-
-        if (!req.delegationIdentity) {
-          throw createAppError(
-            ErrorCode.INVALID_DELEGATION,
-            "Valid delegation identity is required",
-            undefined,
+            { errors: parsed.error.flatten().fieldErrors },
             OperationType.TOKEN_TRANSFER,
             operationId
           );

@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, ReactNode, useCallback } from "react";
+import { useState, useEffect, createContext, useContext, ReactNode, useCallback, useRef } from "react";
 import { AuthClient } from "@dfinity/auth-client";
 import { DelegationIdentity } from "@dfinity/identity";
 import { Principal } from "@dfinity/principal";
@@ -32,30 +32,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [delegationIdentity, setDelegationIdentity] = useState<DelegationIdentity | null>(null);
   const [identityJson, setIdentityJson] = useState<string | null>(null);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
+  const authClientRef = useRef<AuthClient | null>(null);
 
   const disconnect = useCallback(async () => {
     try {
-      if (authClient) {
-        await authClient.logout();
+      if (authClientRef.current) {
+        await authClientRef.current.logout();
       }
     } catch (error) {
       console.error("Error during logout:", error);
     } finally {
-      // Always clear state regardless of logout success
       setPrincipal(null);
       setDelegationIdentity(null);
       setIdentityJson(null);
       setIsConnected(false);
       console.log("Wallet disconnected");
     }
-  }, [authClient]);
+  }, []);
 
   useEffect(() => {
     const initAuthClient = async () => {
       try {
         const client = await AuthClient.create({
           idleOptions: {
-            // Idle timeout of 30 minutes
             idleTimeout: 1000 * 60 * 30,
             onIdle: () => {
               console.log("Session idle, logging out.");
@@ -63,6 +62,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
             },
           },
         });
+        authClientRef.current = client;
         setAuthClient(client);
 
         const isAuthenticated = await client.isAuthenticated();
@@ -94,7 +94,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     initAuthClient();
   }, [disconnect]);
 
-  const connect = async (walletType: string) => {
+  const connect = useCallback(async (walletType: string) => {
     if (!authClient) {
       throw new Error("Auth client not initialized");
     }
@@ -107,9 +107,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         case "internet-identity":
           identityProvider = walletConfig.identityProviderUrl;
           derivationOrigin = walletConfig.internetIdentity.derivationOrigin;
-          break;
-        case "nfid":
-          identityProvider = "https://nfid.one"; // Assuming NFID has one URL
           break;
         default:
           throw new Error(`Unsupported wallet type: ${walletType}`);
@@ -166,8 +163,6 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       if (error instanceof Error) {
         const message = error.message.toLowerCase();
         if (message.includes("user closed") || message.includes("user rejected")) {
-          // This is a user-initiated cancellation, not an error.
-          // We've already reset the state, so we can just return.
           return;
         }
         
@@ -188,7 +183,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       
       throw error;
     }
-  };
+  }, [authClient]);
 
   const getToken = async (): Promise<string | null> => {
     if (!isConnected || !principal) return null;
