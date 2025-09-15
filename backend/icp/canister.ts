@@ -1,7 +1,7 @@
 import { api } from "encore.dev/api";
 import { secret } from "encore.dev/config";
 import { Principal } from "@dfinity/principal";
-import { HttpAgent, Actor, type ActorSubclass } from "@dfinity/agent";
+import { HttpAgent, Actor, type ActorSubclass, AnonymousIdentity } from "@dfinity/agent";
 import { validate } from "../common/validation";
 import { handleError, ErrorCode, AppError, createAppError } from "../common/errors";
 import { metrics, monitor } from "../common/monitoring";
@@ -22,7 +22,6 @@ import {
   DelegationIdentity,
   DelegationChain,
   Ed25519KeyIdentity,
-  AnonymousIdentity,
   type SignIdentity,
 } from "@dfinity/identity";
 
