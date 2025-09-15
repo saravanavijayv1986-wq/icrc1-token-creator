@@ -1,4 +1,4 @@
-import { useState, useEffect, createContext, useContext, ReactNode } from "react";
+import { useState, useEffect, createContext, useContext, ReactNode, useCallback } from "react";
 import { AuthClient } from "@dfinity/auth-client";
 import { DelegationIdentity } from "@dfinity/identity";
 import { Principal } from "@dfinity/principal";
@@ -33,46 +33,66 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [identityJson, setIdentityJson] = useState<string | null>(null);
   const [authClient, setAuthClient] = useState<AuthClient | null>(null);
 
-  useEffect(() => {
-    initAuthClient();
-  }, []);
-
-  const initAuthClient = async () => {
+  const disconnect = useCallback(async () => {
     try {
-      const client = await AuthClient.create({
-        idleOptions: {
-          // Idle timeout of 30 minutes
-          idleTimeout: 1000 * 60 * 30,
-          disableDefaultIdleCallback: true,
-        },
-      });
-      setAuthClient(client);
-
-      const isAuthenticated = await client.isAuthenticated();
-      if (isAuthenticated) {
-        const identity = client.getIdentity();
-        if (identity instanceof DelegationIdentity) {
-          const principalId = identity.getPrincipal();
-          if (principalId && !principalId.isAnonymous()) {
-            setPrincipal(principalId.toString());
-            setDelegationIdentity(identity);
-            const idJson = JSON.stringify(identity.toJSON());
-            setIdentityJson(idJson);
-            setIsConnected(true);
-            console.log("Restored wallet connection:", principalId.toString());
-          } else {
-            console.warn("Anonymous or invalid principal detected, clearing session");
-            await client.logout();
-          }
-        } else {
-          console.warn("Non-delegation identity detected, clearing session");
-          await client.logout();
-        }
+      if (authClient) {
+        await authClient.logout();
       }
     } catch (error) {
-      console.error("Failed to initialize AuthClient:", error);
+      console.error("Error during logout:", error);
+    } finally {
+      // Always clear state regardless of logout success
+      setPrincipal(null);
+      setDelegationIdentity(null);
+      setIdentityJson(null);
+      setIsConnected(false);
+      console.log("Wallet disconnected");
     }
-  };
+  }, [authClient]);
+
+  useEffect(() => {
+    const initAuthClient = async () => {
+      try {
+        const client = await AuthClient.create({
+          idleOptions: {
+            // Idle timeout of 30 minutes
+            idleTimeout: 1000 * 60 * 30,
+            onIdle: () => {
+              console.log("Session idle, logging out.");
+              disconnect();
+            },
+          },
+        });
+        setAuthClient(client);
+
+        const isAuthenticated = await client.isAuthenticated();
+        if (isAuthenticated) {
+          const identity = client.getIdentity();
+          if (identity instanceof DelegationIdentity) {
+            const principalId = identity.getPrincipal();
+            if (principalId && !principalId.isAnonymous()) {
+              setPrincipal(principalId.toString());
+              setDelegationIdentity(identity);
+              const idJson = JSON.stringify(identity.toJSON());
+              setIdentityJson(idJson);
+              setIsConnected(true);
+              console.log("Restored wallet connection:", principalId.toString());
+            } else {
+              console.warn("Anonymous or invalid principal detected, clearing session");
+              await client.logout();
+            }
+          } else {
+            console.warn("Non-delegation identity detected, clearing session");
+            await client.logout();
+          }
+        }
+      } catch (error) {
+        console.error("Failed to initialize AuthClient:", error);
+      }
+    };
+
+    initAuthClient();
+  }, [disconnect]);
 
   const connect = async (walletType: string) => {
     if (!authClient) {
@@ -144,35 +164,29 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setIsConnected(false);
       
       if (error instanceof Error) {
-        if (error.message.includes("User rejected")) {
-          throw new Error("Connection was cancelled. Please try again and approve the connection.");
-        } else if (error.message.includes("network") || error.message.includes("fetch")) {
-          throw new Error("Network error. Please check your connection and try again.");
-        } else if (error.message.includes("principal")) {
-          throw new Error("Authentication failed: Invalid identity format. Please reconnect your wallet.");
-        } else {
-          throw new Error(`Connection failed: ${error.message}`);
+        const message = error.message.toLowerCase();
+        if (message.includes("user closed") || message.includes("user rejected")) {
+          // This is a user-initiated cancellation, not an error.
+          // We've already reset the state, so we can just return.
+          return;
         }
+        
+        let friendlyMessage: string;
+        if (message.includes("network") || message.includes("fetch")) {
+          friendlyMessage = "Network error. Please check your connection and try again.";
+        } else if (message.includes("principal") || message.includes("identity format")) {
+          friendlyMessage = "Authentication failed: Invalid identity format. Please reconnect your wallet.";
+        } else if (message.includes("timed out")) {
+          friendlyMessage = "Connection timed out. The identity provider may be busy. Please try again.";
+        } else if (message.includes("root key")) {
+          friendlyMessage = "Failed to connect to local network. Ensure your local replica is running correctly.";
+        } else {
+          friendlyMessage = `Connection failed: ${error.message}`;
+        }
+        throw new Error(friendlyMessage);
       }
       
       throw error;
-    }
-  };
-
-  const disconnect = async () => {
-    try {
-      if (authClient) {
-        await authClient.logout();
-      }
-    } catch (error) {
-      console.error("Error during logout:", error);
-    } finally {
-      // Always clear state regardless of logout success
-      setPrincipal(null);
-      setDelegationIdentity(null);
-      setIdentityJson(null);
-      setIsConnected(false);
-      console.log("Wallet disconnected");
     }
   };
 
