@@ -24,6 +24,7 @@ import {
   Ed25519KeyIdentity,
   type SignIdentity,
 } from "@dfinity/identity";
+import { Secp256k1KeyIdentity } from "@dfinity/identity-secp256k1";
 import { z } from "zod";
 
 const icpHost = secret("ICPHost");
@@ -87,9 +88,18 @@ export function toSignIdentity(identityData: unknown): SignIdentity {
       return DelegationIdentity.fromJSON(parsed);
     }
 
-    // Check if it's an Ed25519KeyIdentity representation: [pubkey, privkey]
+    // Check if it's a key pair representation: [pubkey, privkey]
     if (typeof parsed[0] === 'string' && typeof parsed[1] === 'string') {
-      return Ed25519KeyIdentity.fromJSON(parsed);
+      const pubKeyHex = parsed[0];
+      // Ed25519 public key is 32 bytes (64 hex chars).
+      if (pubKeyHex.length === 64) {
+        return Ed25519KeyIdentity.fromJSON(parsed);
+      }
+      // Secp256k1 public key is 33 bytes (compressed, 66 hex chars).
+      if (pubKeyHex.length === 66) {
+        return Secp256k1KeyIdentity.fromJSON(parsed);
+      }
+      throw new Error(`Unrecognized public key length for raw key pair: ${pubKeyHex.length}`);
     }
 
     throw new Error("Unrecognized identity format in JSON");

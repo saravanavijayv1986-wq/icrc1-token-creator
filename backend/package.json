@@ -10,6 +10,7 @@
     "@dfinity/agent": "^3.2.4",
     "@dfinity/candid": "^3.2.4",
     "@dfinity/identity": "^3.2.4",
+    "@dfinity/identity-secp256k1": "^3.2.4",
     "@dfinity/principal": "^3.2.4",
     "encore.dev": "^1.49.3",
     "zod": "^3.25.76"
