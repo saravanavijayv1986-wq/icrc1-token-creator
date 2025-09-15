@@ -221,7 +221,7 @@ export default function CreateTokenPage() {
     }
     
     if (icpBalance?.error) {
-      const errorMessage = friendlyErrorMessages[icpBalance.error] || icpBalance.error;
+      const errorMessage = friendlyErrorMessages[icpBalance.error] || "An unknown error occurred.";
       return (
         <div className="flex items-center space-x-2">
           <span className="text-red-600 text-sm">{errorMessage}</span>
@@ -238,6 +238,11 @@ export default function CreateTokenPage() {
     
     return "0.00000000 ICP";
   };
+
+  const isButtonDisabled = createTokenMutation.isPending || 
+                           !isConnected || 
+                           isValidating || 
+                           (icpBalance && !icpBalance.error && !hasSufficientBalance);
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-2xl">
@@ -584,7 +589,7 @@ export default function CreateTokenPage() {
               type="submit"
               className="w-full"
               size="lg"
-              disabled={createTokenMutation.isPending || !isConnected || isValidating || (icpBalance && icpBalance.balance && !icpBalance.error && !hasSufficientBalance)}
+              disabled={isButtonDisabled}
             >
               {createTokenMutation.isPending ? (
                 <>
@@ -610,7 +615,7 @@ export default function CreateTokenPage() {
               </p>
             )}
 
-            {isConnected && icpBalance && icpBalance.balance && !icpBalance.error && !hasSufficientBalance && (
+            {isConnected && icpBalance && !icpBalance.error && !hasSufficientBalance && (
               <p className="text-center text-sm text-red-600">
                 Insufficient ICP balance. You need {tokenConfig.fees.creationFeeICP} ICP to create a token.
               </p>
