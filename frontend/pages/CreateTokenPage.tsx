@@ -280,6 +280,28 @@ export default function CreateTokenPage() {
                 </div>
               </div>
 
+              {icpBalance?.error && (
+                <div className="p-3 rounded-lg bg-yellow-100 border border-yellow-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <AlertTriangle className="h-5 w-5 text-yellow-600" />
+                      <span className="text-yellow-800 font-medium">
+                        {icpBalance.error === "Network connection error" 
+                          ? "Network error fetching balance. Please check your connection and try again."
+                          : icpBalance.error === "Invalid principal format"
+                          ? "Invalid wallet principal format. Please reconnect your wallet."
+                          : icpBalance.error === "Request timed out"
+                          ? "Request timed out. The IC network might be busy. Please try again."
+                          : "Unable to fetch ICP balance. You can still proceed with token creation."}
+                      </span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => refetchBalance()}>
+                      Retry
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               {icpBalance && icpBalance.balance && !icpBalance.error && (
                 <div className={`p-3 rounded-lg flex items-center space-x-2 ${
                   hasSufficientBalance 
@@ -301,28 +323,6 @@ export default function CreateTokenPage() {
                       </span>
                     </>
                   )}
-                </div>
-              )}
-
-              {icpBalance?.error && (
-                <div className="p-3 rounded-lg bg-yellow-100 border border-yellow-200">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-2">
-                      <AlertTriangle className="h-5 w-5 text-yellow-600" />
-                      <span className="text-yellow-800 font-medium">
-                        {icpBalance.error === "Network connection error" 
-                          ? "Network error fetching balance. Please check your connection and try again."
-                          : icpBalance.error === "Invalid principal format"
-                          ? "Invalid wallet principal format. Please reconnect your wallet."
-                          : icpBalance.error === "Request timed out"
-                          ? "Request timed out. The IC network might be busy. Please try again."
-                          : "Unable to fetch ICP balance. You can still proceed with token creation."}
-                      </span>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={() => refetchBalance()}>
-                      Retry
-                    </Button>
-                  </div>
                 </div>
               )}
 

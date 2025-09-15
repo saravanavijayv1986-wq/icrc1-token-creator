@@ -1498,7 +1498,6 @@ export interface BalanceRequest {
 
 export interface BalanceResponse {
   balance: string;
-  error?: string;
 }
 
 export const getBalance = api<BalanceRequest, BalanceResponse>(
@@ -1599,37 +1598,7 @@ export const getBalance = api<BalanceRequest, BalanceResponse>(
           balance: balance.toString(),
         };
       } catch (error) {
-        logger.error("Failed to get balance", error instanceof Error ? error : new Error(String(error)), {
-          operationType: OperationType.BALANCE_QUERY,
-          operationId,
-          canisterId: req.canisterId,
-          metadata: {
-            principalLength: req.principal.length
-          }
-        });
-
-        let errorMessage = "Unknown error";
-        if (error instanceof Error) {
-          const msg = error.message.toLowerCase();
-          if (msg.includes("network") || msg.includes("fetch")) {
-            errorMessage = "Network connection error";
-          } else if (msg.includes("timeout")) {
-            errorMessage = "Request timeout";
-          } else if (msg.includes("unauthorized") || msg.includes("unauthenticated")) {
-            errorMessage = "Authentication error";
-          } else if (msg.includes("canister") || msg.includes("replica")) {
-            errorMessage = "Blockchain network error";
-          } else if (msg.includes("principal") || msg.includes("invalid")) {
-            errorMessage = "Invalid wallet principal format";
-          } else {
-            errorMessage = error.message;
-          }
-        }
-
-        return {
-          balance: "0",
-          error: errorMessage,
-        };
+        return handleError(error as Error, "icp.getBalance", OperationType.BALANCE_QUERY, operationId);
       }
     })
   )
