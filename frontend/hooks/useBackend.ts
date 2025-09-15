@@ -12,23 +12,6 @@ function icpToE8s(amount: string | number): bigint {
   return BigInt(intPart) * 100000000n + BigInt(fracPadded);
 }
 
-function isValidPrincipal(principal: string): boolean {
-  if (!principal || typeof principal !== 'string') return false;
-  if (principal.length < 5 || principal.length > 63) return false;
-  if (!/^[a-z0-9-]+$/.test(principal)) return false;
-  if (!principal.includes('-')) return false;
-  
-  // More flexible principal patterns to handle various formats
-  const patterns = [
-    /^[a-z0-9]{2,}-[a-z0-9]{3}$/, // Short format like "2vxsx-fae"
-    /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/, // Standard format
-    /^[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/, // Variable length segments
-    /^[a-z0-9]{27}$/, // Base32 without separators (convert to check)
-  ];
-  
-  return patterns.some(pattern => pattern.test(principal));
-}
-
 async function withRetry<T>(
   operation: () => Promise<T>,
   maxRetries: number = 3,
@@ -189,10 +172,6 @@ export function useBackend() {
       throw new Error("Recipient principal is required");
     }
 
-    if (!isValidPrincipal(toPrincipal)) {
-      throw new Error("Invalid recipient principal format");
-    }
-
     const amountE8s = icpToE8s(amountICP);
     if (amountE8s <= 0n) {
       throw new Error("Amount must be greater than 0");
@@ -223,10 +202,10 @@ export function useBackend() {
   const getICPBalance = useCallback(async (
     targetPrincipal: string
   ) => {
-    if (!isValidPrincipal(targetPrincipal)) {
+    if (!targetPrincipal) {
       return {
         balance: "0",
-        error: "Invalid principal format"
+        error: "Principal is required"
       };
     }
 
@@ -266,7 +245,7 @@ export function useBackend() {
       } else if (errorMessage.includes('canister') || errorMessage.includes('replica')) {
         return { balance: "0", error: "The Internet Computer network is temporarily unavailable. Please try again in a moment." };
       } else if (errorMessage.includes('principal') || errorMessage.includes('invalid')) {
-        return { balance: "0", error: "Invalid wallet address format" };
+        return { balance: "0", error: "Invalid wallet principal format" };
       } else if (errorMessage.includes('service') || errorMessage.includes('unavailable')) {
         return { balance: "0", error: "Service is temporarily unavailable. Please try again." };
       } else {

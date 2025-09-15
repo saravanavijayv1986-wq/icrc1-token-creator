@@ -119,16 +119,6 @@ export default function WalletConnect() {
       return;
     }
 
-    const principalPattern = /^[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{5}-[a-z0-9]{3}$/;
-    if (!principalPattern.test(transferTo)) {
-      toast({
-        title: "Invalid Recipient",
-        description: "Please enter a valid principal ID.",
-        variant: "destructive",
-      });
-      return;
-    }
-
     const amountNum = Number(transferAmount);
     if (!isFinite(amountNum) || amountNum <= 0) {
       toast({
